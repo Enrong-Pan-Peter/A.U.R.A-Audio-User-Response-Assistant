@@ -1,0 +1,35 @@
+{
+  "name": "devvoice",
+  "version": "1.0.0",
+  "description": "Voice-first developer assistant for local git repositories",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "devvoice": "./dist/cli.js"
+  },
+  "scripts": {
+    "dev": "tsx src/cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [
+    "cli",
+    "voice",
+    "developer",
+    "assistant"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "commander": "^11.1.0",
+    "dotenv": "^16.4.5",
+    "node-record-lpcm16": "^1.0.1",
+    "wav": "^1.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/wav": "^1.0.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

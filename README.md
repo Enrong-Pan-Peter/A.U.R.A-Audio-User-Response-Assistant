@@ -1,0 +1,240 @@
+# DevVoice
+
+A voice-first developer assistant CLI tool for local git repositories. Control your development workflow using voice commands with safety-first execution.
+
+## Features
+
+- 🎤 **Voice Input**: Push-to-talk recording (up to 8 seconds per turn)
+- 🧠 **Intent-Based Commands**: Safe command execution via whitelist mapping
+- 🔊 **Text-to-Speech**: ElevenLabs integration for spoken responses
+- 💬 **Two Modes**:
+  - `listen`: Single-turn command execution
+  - `chat`: Multi-turn interactive session with memory
+- 🛡️ **Safety First**: Never executes arbitrary shell commands
+- 📊 **Smart Summarization**: Extracts key information from command outputs
+
+## Installation
+
+### Prerequisites
+
+- Node.js 18+ and pnpm
+- **Audio Recording**: 
+  - macOS: Built-in support
+  - Linux: `sox` or `rec` (install via `sudo apt-get install sox` or `sudo yum install sox`)
+  - Windows: `sox` (install from [sox.sourceforge.net](http://sox.sourceforge.net/))
+- **Audio Playback**:
+  - macOS: Built-in (`afplay`)
+  - Linux: `mpg123` or `aplay` (install via package manager)
+  - Windows: Built-in (Windows Media Player)
+
+### Setup
+
+1. Clone or navigate to the project directory:
+```bash
+cd devvoice
+```
+
+2. Install dependencies:
+```bash
+pnpm install
+```
+
+3. Set environment variables:
+```bash
+# Required for TTS (ElevenLabs)
+export ELEVENLABS_API_KEY="your-api-key-here"
+
+# Optional: Custom voice ID (default: Rachel)
+export ELEVENLABS_VOICE_ID="your-voice-id"
+```
+
+4. Build the project:
+```bash
+pnpm build
+```
+
+## Usage
+
+### Single-Turn Mode (`listen`)
+
+Execute a single voice command and exit:
+
+```bash
+pnpm dev listen
+# or
+pnpm dev listen --repo /path/to/repo
+# or
+pnpm dev listen --mute  # Disable TTS
+```
+
+**Example flow:**
+1. Press Enter to start recording
+2. Speak your command (e.g., "run tests")
+3. Wait for transcription and confirmation (if needed)
+4. Command executes and results are spoken
+5. Tool exits
+
+### Multi-Turn Mode (`chat`)
+
+Interactive chat session with memory:
+
+```bash
+pnpm dev chat
+# or
+pnpm dev chat --repo /path/to/repo
+# or
+pnpm dev chat --mute  # Disable TTS
+```
+
+**Example flow:**
+1. Press Enter to start recording
+2. Speak your command
+3. Get results and summary
+4. Say "exit" to quit, or continue with follow-ups like:
+   - "details" - Show more details about last output
+   - "explain failure" - Explain why last command failed
+   - "repeat" - Repeat last summary
+   - "run tests" - Execute another command
+
+## Supported Commands
+
+### Read-Only (No Confirmation Required)
+
+- **`run tests`** - Execute test suite (detects `pnpm test` or `npm test`)
+- **`git status`** - Show git status with file changes
+- **`run lint`** - Run linter (if configured in package.json)
+- **`run build`** - Build project (if configured in package.json)
+
+### Write Actions (Requires Spoken Confirmation)
+
+- **`create branch <name>`** - Create and checkout new git branch
+  - Example: "create branch feature-auth"
+- **`commit <message>`** - Create git commit with message
+  - Example: "commit add user authentication"
+  - Note: Requires staged changes
+
+### Session Commands (Chat Mode Only)
+
+- **`details`** - Show detailed output from last command
+- **`explain failure`** - Explain why last command failed
+- **`repeat`** - Repeat last summary
+- **`help`** - Show available commands
+- **`exit`** - Exit chat mode
+
+## Architecture
+
+```
+src/
+├── cli.ts              # CLI entry point
+├── modes/
+│   ├── listen.ts       # Single-turn mode
+│   └── chat.ts         # Multi-turn mode
+├── voice/
+│   ├── record.ts       # Audio recording
+│   └── transcribe.ts   # Speech-to-text (placeholder)
+├── tts/
+│   ├── elevenlabs.ts   # ElevenLabs TTS integration
+│   └── playback.ts     # Cross-platform audio playback
+├── intents/
+│   ├── types.ts        # Intent type definitions
+│   ├── router.ts       # Text → Intent routing
+│   └── whitelist.ts    # Intent → Safe command mapping
+├── exec/
+│   └── runner.ts       # Safe command execution
+├── summarize/
+│   ├── index.ts        # Summarization router
+│   ├── tests.ts        # Test output summarization
+│   ├── git.ts          # Git status summarization
+│   ├── lint.ts         # Lint output summarization
+│   ├── build.ts        # Build output summarization
+│   └── generic.ts      # Generic summarization
+└── session/
+    └── memory.ts       # Chat session memory
+```
+
+## Safety Features
+
+1. **Whitelist-Based Execution**: Only predefined commands are executed
+2. **No Shell Injection**: Uses `spawn` with explicit command/args (never shell strings)
+3. **Parameter Sanitization**: Branch names and commit messages are sanitized
+4. **Confirmation Required**: Write actions require spoken confirmation
+5. **Intent Validation**: Unknown commands are rejected
+
+## Transcription Integration
+
+The current implementation uses a placeholder transcription that prompts for manual input. To integrate a real STT provider:
+
+1. Edit `src/voice/transcribe.ts`
+2. Replace the `transcribe()` function with your provider's API
+3. Supported providers:
+   - OpenAI Whisper API
+   - Google Cloud Speech-to-Text
+   - Azure Speech Services
+   - AssemblyAI
+   - Deepgram
+
+Example (OpenAI Whisper):
+```typescript
+import FormData from 'form-data';
+import fs from 'fs';
+import fetch from 'node-fetch';
+
+export async function transcribe(audioPath: string): Promise<string> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not set');
+
+  const formData = new FormData();
+  formData.append('file', fs.createReadStream(audioPath));
+  formData.append('model', 'whisper-1');
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  const data = await response.json();
+  return data.text;
+}
+```
+
+## Development
+
+```bash
+# Development mode (with tsx)
+pnpm dev listen
+
+# Build
+pnpm build
+
+# Run built version
+pnpm start listen
+```
+
+## Troubleshooting
+
+### Audio Recording Fails
+
+- **macOS/Linux**: Ensure `sox` or `rec` is installed
+- **Windows**: Install `sox` and ensure it's in PATH
+- Check microphone permissions in system settings
+
+### Audio Playback Fails
+
+- **Linux**: Install `mpg123` for MP3 playback: `sudo apt-get install mpg123`
+- **Windows**: Should work with built-in Windows Media Player
+- If playback fails, audio files are saved to temp directory (path is printed)
+
+### Transcription Placeholder
+
+The MVP uses a manual input placeholder. For production, integrate a real STT provider (see Transcription Integration section).
+
+### ElevenLabs API Errors
+
+- Verify `ELEVENLABS_API_KEY` is set correctly
+- Check API quota/limits
+- Use `--mute` flag to disable TTS for testing
+
+## License
+
+MIT
