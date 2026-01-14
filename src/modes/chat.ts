@@ -4,24 +4,36 @@ import { routeIntent, createPlan } from '../intents/router.js';
 import { getCommandForIntent } from '../intents/whitelist.js';
 import { executeCommand } from '../exec/runner.js';
 import { summarize } from '../summarize/index.js';
-import { speak, playAudioFile } from '../voice/tts.js';
+import { speak } from '../voice/tts.js';
 import { createMemory, updateMemory, explainFailure, getDetails } from '../session/memory.js';
 import { Intent } from '../intents/types.js';
 import { planAndExplain } from '../agent/agent.js';
 import { existsSync } from 'fs';
 
+import { PlayMode } from '../voice/tts.js';
+
+export interface ChatOptions {
+  keepAudio?: boolean;
+  player?: string;
+  playMode?: PlayMode;
+}
+
 /**
  * Safely calls speak() without breaking the chat loop if it fails.
  */
-async function safeSpeak(text: string, mute: boolean): Promise<void> {
+async function safeSpeak(
+  text: string,
+  mute: boolean,
+  options: ChatOptions = {}
+): Promise<void> {
   if (mute) return;
   try {
-    const audioPath = await speak(text);
-    if (!mute) {
-      await playAudioFile(audioPath);
-    } else {
-      console.log(`🔇 Muted: Audio saved to ${audioPath}`);
-    }
+    await speak(text, {
+      play: !mute,
+      playMode: options.playMode || 'stream',
+      keepAudio: options.keepAudio,
+      player: options.player,
+    });
   } catch (error) {
     // Log but don't throw - we want the chat loop to continue
     if (error instanceof Error && error.message.includes('ELEVENLABS_API_KEY')) {
@@ -35,7 +47,12 @@ async function safeSpeak(text: string, mute: boolean): Promise<void> {
 /**
  * Multi-turn chat mode: interactive loop with session memory.
  */
-export async function chatMode(repoPath: string, mute: boolean, useAgent: boolean = false): Promise<void> {
+export async function chatMode(
+  repoPath: string,
+  mute: boolean,
+  useAgent: boolean = false,
+  options: ChatOptions = {}
+): Promise<void> {
   console.log('🎤 DevVoice - Chat Mode');
   console.log(`📁 Repository: ${repoPath}`);
   console.log('💬 Say "exit" to quit\n');
@@ -86,7 +103,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         if (agentResult.confidence < 0.6 && agentResult.clarifyingQuestion) {
           const questionText = `I'm not sure I understood. ${agentResult.clarifyingQuestion}`;
           console.log(`\n❓ ${questionText}`);
-          await safeSpeak(questionText, mute);
+          await safeSpeak(questionText, mute, options);
           continue;
         }
         
@@ -97,11 +114,24 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         // Map intent to confirmation requirement
         requiresConfirmation = intent === Intent.CREATE_BRANCH || intent === Intent.MAKE_COMMIT;
         
-        // Use AI explanation for EXPLAIN_FAILURE if available
-        if (agentResult.explanation && intent === Intent.EXPLAIN_FAILURE) {
-          console.log(`\n💡 Explanation: ${agentResult.explanation}`);
-          await safeSpeak(agentResult.explanation, mute);
-          continue;
+        // Speak agent's explanation if available (for any intent, not just EXPLAIN_FAILURE)
+        if (agentResult.explanation) {
+          console.log(`\n💡 ${agentResult.explanation}`);
+          await safeSpeak(agentResult.explanation, mute, options);
+          
+          // For EXPLAIN_FAILURE, explanation is the full response, so continue
+          if (intent === Intent.EXPLAIN_FAILURE) {
+            continue;
+          }
+        }
+        
+        // Also speak the plan description if no explanation was provided
+        if (!agentResult.explanation && planDescription) {
+          console.log(`\n📋 Plan: ${planDescription}`);
+          await safeSpeak(`I will ${planDescription.toLowerCase()}`, mute, options);
+        } else if (planDescription) {
+          // Log plan even if explanation was spoken
+          console.log(`\n📋 Plan: ${planDescription}`);
         }
       } else {
         // Fallback to simple router
@@ -111,33 +141,35 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         params = plan.params;
         planDescription = plan.description;
         requiresConfirmation = plan.requiresConfirmation;
+        
+        // Speak plan description for non-agent mode
+        console.log(`\n📋 Plan: ${planDescription}`);
+        await safeSpeak(`I will ${planDescription.toLowerCase()}`, mute, options);
       }
-      
-      console.log(`\n📋 Plan: ${planDescription}`);
       
       // Handle special intents
       if (intent === Intent.EXIT) {
         const goodbyeText = 'Goodbye!';
         console.log(goodbyeText);
-        await safeSpeak(goodbyeText, mute);
+        await safeSpeak(goodbyeText, mute, options);
         break;
       }
       
       if (intent === Intent.HELP) {
         const helpText = getHelpText();
         console.log(helpText);
-        await safeSpeak(helpText, mute);
+        await safeSpeak(helpText, mute, options);
         continue;
       }
       
       if (intent === Intent.REPEAT_LAST) {
         if (memory.lastSummary) {
           console.log(`\n📊 Repeating: ${memory.lastSummary}`);
-          await safeSpeak(memory.lastSummary, mute);
+          await safeSpeak(memory.lastSummary, mute, options);
         } else {
           const noLastText = 'No previous summary to repeat.';
           console.log(noLastText);
-          await safeSpeak(noLastText, mute);
+          await safeSpeak(noLastText, mute, options);
         }
         continue;
       }
@@ -147,7 +179,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         // Otherwise use fallback explanation
         const explanation = explainFailure(memory);
         console.log(`\n📊 Explanation: ${explanation}`);
-        await safeSpeak(explanation, mute);
+        await safeSpeak(explanation, mute, options);
         continue;
       }
       
@@ -156,14 +188,14 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         console.log(`\n📄 Details:\n${details}`);
         // Summarize details for speech (first 200 chars)
         const speechDetails = details.length > 200 ? details.substring(0, 200) + '...' : details;
-        await safeSpeak(`Details: ${speechDetails}`, mute);
+        await safeSpeak(`Details: ${speechDetails}`, mute, options);
         continue;
       }
       
       if (intent === Intent.UNKNOWN) {
         const unknownText = `I didn't understand that. Try saying "help" for available commands.`;
         console.log(unknownText);
-        await safeSpeak(unknownText, mute);
+        await safeSpeak(unknownText, mute, options);
         continue;
       }
       
@@ -178,7 +210,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
           errorText = `Cannot execute ${intent}. Command not available or parameters missing.`;
         }
         console.log(`❌ ${errorText}`);
-        await safeSpeak(errorText, mute);
+        await safeSpeak(errorText, mute, options);
         continue;
       }
       
@@ -195,7 +227,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
         if (!normalized.includes('confirm') && !normalized.includes('proceed') && !normalized.includes('yes')) {
           const cancelledText = 'Action cancelled.';
           console.log(`❌ ${cancelledText}`);
-          await safeSpeak(cancelledText, mute);
+          await safeSpeak(cancelledText, mute, options);
           continue;
         }
       }
@@ -210,7 +242,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
       
       // Step 9: Summarize and speak
       console.log(`\n📊 Summary: ${summary}`);
-      await safeSpeak(summary, mute);
+      await safeSpeak(summary, mute, options);
       
       // Show full output if verbose
       if (result.stdout) {
@@ -228,7 +260,7 @@ export async function chatMode(repoPath: string, mute: boolean, useAgent: boolea
     } catch (error) {
       console.error('❌ Error:', error);
       const errorText = `An error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`;
-      await safeSpeak(errorText, mute);
+      await safeSpeak(errorText, mute, options);
       // Continue loop instead of exiting
     }
   }

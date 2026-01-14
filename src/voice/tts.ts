@@ -1,42 +1,54 @@
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { existsSync } from 'fs';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { randomUUID } from 'crypto';
 import { elevenFetch, getElevenLabsApiKey } from './elevenlabs.js';
-
-const execAsync = promisify(exec);
+import { playAudio, PlaybackOptions } from '../tts/playback.js';
+import { streamPlayAudio } from '../audio/streamPlay.js';
 
 const DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel
 
+export type PlayMode = 'stream' | 'file';
+
+export interface SpeakOptions {
+  /** Voice ID to use (default: Rachel) */
+  voiceId?: string;
+  /** Whether to play audio automatically (default: true) */
+  play?: boolean;
+  /** Playback mode: 'stream' pipes to ffplay (no files), 'file' saves and plays file (default: 'stream') */
+  playMode?: PlayMode;
+  /** Whether to keep the audio file after playback (default: false, only applies to file mode) */
+  keepAudio?: boolean;
+  /** Custom player command (overrides platform default, only applies to file mode) */
+  player?: string;
+}
+
 /**
- * Converts text to speech using ElevenLabs API.
+ * Converts text to speech using ElevenLabs API and optionally plays it.
  * 
  * @param text - Text to convert to speech
- * @param opts - Optional settings (voiceId)
+ * @param opts - Optional settings (voiceId, play, keepAudio, player)
  * @returns Promise resolving to the path of the saved audio file
  */
 export async function speak(
   text: string,
-  opts?: { voiceId?: string }
+  opts: SpeakOptions = {}
 ): Promise<string> {
+  const {
+    voiceId = process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID,
+    play = true,
+    playMode = 'stream',
+    keepAudio = false,
+    player,
+  } = opts;
+
   // Check API key (will throw if missing)
   try {
     getElevenLabsApiKey();
   } catch (error) {
     throw new Error('ELEVENLABS_API_KEY not set. Cannot generate speech.');
   }
-
-  const voiceId = opts?.voiceId || process.env.ELEVENLABS_VOICE_ID || DEFAULT_VOICE_ID;
-  
-  // Ensure tmp directory exists
-  const tmpDir = join(tmpdir(), 'devvoice');
-  if (!existsSync(tmpDir)) {
-    await mkdir(tmpDir, { recursive: true });
-  }
-  
-  const audioPath = join(tmpDir, 'devvoice-tts.mp3');
 
   try {
     // Make the API request
@@ -65,7 +77,69 @@ export async function speak(
     }
 
     const audioBuffer = await response.arrayBuffer();
-    await writeFile(audioPath, Buffer.from(audioBuffer));
+    const audioData = Buffer.from(audioBuffer);
+    
+    // Stream mode: pipe directly to ffplay without saving
+    if (play && playMode === 'stream') {
+      try {
+        await streamPlayAudio(audioData, { format: 'mp3' });
+        // In stream mode, no file is created, so return empty string or a placeholder
+        return '';
+      } catch (streamError) {
+        // If streaming fails, fall back to file mode
+        console.warn(
+          '⚠️  Streaming playback failed, falling back to file mode:',
+          streamError instanceof Error ? streamError.message : streamError
+        );
+        // Fall through to file mode
+      }
+    }
+    
+    // File mode: save to disk and play
+    // Ensure tmp directory exists
+    const tmpDir = join(tmpdir(), 'devvoice');
+    if (!existsSync(tmpDir)) {
+      await mkdir(tmpDir, { recursive: true });
+    }
+    
+    // Use unique filename to avoid conflicts
+    const audioPath = join(tmpDir, `devvoice-tts-${randomUUID()}.mp3`);
+    await writeFile(audioPath, audioData);
+    
+    // Play audio if requested
+    if (play) {
+      try {
+        const playbackOptions: PlaybackOptions = player ? { player } : {};
+        await playAudio(audioPath, playbackOptions);
+        
+        // Clean up file after successful playback if not keeping it
+        if (!keepAudio) {
+          try {
+            await unlink(audioPath);
+          } catch (cleanupError) {
+            // Ignore cleanup errors - file will remain
+          }
+        }
+      } catch (playbackError) {
+        // Log error but don't fail - file is still saved
+        console.error(
+          '⚠️  Audio playback failed:',
+          playbackError instanceof Error ? playbackError.message : playbackError
+        );
+        console.log(`📁 Audio file saved to: ${audioPath}`);
+        // Don't clean up on playback failure - user might want the file
+      }
+    } else {
+      console.log(`🔇 Muted: Audio saved to ${audioPath}`);
+      // Clean up file if muted and not keeping it
+      if (!keepAudio) {
+        try {
+          await unlink(audioPath);
+        } catch (cleanupError) {
+          // Ignore cleanup errors
+        }
+      }
+    }
     
     return audioPath;
   } catch (error) {
@@ -77,29 +151,17 @@ export async function speak(
 }
 
 /**
- * Plays an audio file on Windows using start command (for mp3).
- * Falls back to printing the path if playback fails.
- */
-async function playAudioOnWindows(audioPath: string): Promise<void> {
-  try {
-    // Use start command to play mp3 on Windows
-    await execAsync(`start "" "${audioPath}"`);
-  } catch (error) {
-    // If playback fails, just print the path
-    console.log(`⚠️  Could not play audio. File saved to: ${audioPath}`);
-  }
-}
-
-/**
- * Plays the audio file (cross-platform, with Windows support).
- * On failure, prints the file path.
+ * Plays the audio file (cross-platform).
+ * @deprecated Use speak() with play option instead, or import playAudio directly
  */
 export async function playAudioFile(audioPath: string): Promise<void> {
-  if (process.platform === 'win32') {
-    await playAudioOnWindows(audioPath);
-  } else {
-    // For non-Windows, just print the path for now
-    console.log(`🔊 Audio saved to: ${audioPath}`);
-    console.log('   (Playback not implemented for this platform)');
+  try {
+    await playAudio(audioPath);
+  } catch (error) {
+    console.error(
+      '⚠️  Playback failed:',
+      error instanceof Error ? error.message : error
+    );
+    console.log(`📁 Audio file saved to: ${audioPath}`);
   }
 }

@@ -6,14 +6,25 @@ import { Intent } from '../intents/types.js';
 import { getCommandForIntent } from '../intents/whitelist.js';
 import { createMemory } from '../session/memory.js';
 import { summarize } from '../summarize/index.js';
-import { speak } from '../tts/elevenlabs.js';
+import { speak, PlayMode } from '../voice/tts.js';
 import { recordAudio, waitForPushToTalk } from '../voice/record.js';
 import { transcribe } from '../voice/transcribe.js';
+
+export interface ListenOptions {
+  keepAudio?: boolean;
+  player?: string;
+  playMode?: PlayMode;
+}
 
 /**
  * Single-turn listen mode: record, transcribe, plan, confirm if needed, execute, summarize, speak.
  */
-export async function listenMode(repoPath: string, mute: boolean, useAgent: boolean = false): Promise<void> {
+export async function listenMode(
+  repoPath: string,
+  mute: boolean,
+  useAgent: boolean = false,
+  options: ListenOptions = {}
+): Promise<void> {
   console.log('🎤 DevVoice - Single Turn Mode');
   console.log(`📁 Repository: ${repoPath}`);
   
@@ -53,7 +64,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
         const questionText = `I'm not sure I understood. ${agentResult.clarifyingQuestion}`;
         console.log(`\n❓ ${questionText}`);
         if (!mute) {
-          await speak(questionText, mute);
+          await speak(questionText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
         }
         return;
       }
@@ -65,13 +76,28 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
       // Map intent to confirmation requirement
       requiresConfirmation = intent === Intent.CREATE_BRANCH || intent === Intent.MAKE_COMMIT;
       
-      // Use explanation if available (especially for EXPLAIN_FAILURE)
-      if (agentResult.explanation && intent === Intent.EXPLAIN_FAILURE) {
-        console.log(`\n💡 Explanation: ${agentResult.explanation}`);
+      // Speak agent's explanation if available (for any intent, not just EXPLAIN_FAILURE)
+      if (agentResult.explanation) {
+        console.log(`\n💡 ${agentResult.explanation}`);
         if (!mute) {
-          await speak(agentResult.explanation, mute);
+          await speak(agentResult.explanation, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
         }
-        return;
+        
+        // For EXPLAIN_FAILURE, explanation is the full response, so return
+        if (intent === Intent.EXPLAIN_FAILURE) {
+          return;
+        }
+      }
+      
+      // Also speak the plan description if no explanation was provided
+      if (!agentResult.explanation && planDescription) {
+        console.log(`\n📋 Plan: ${planDescription}`);
+        if (!mute) {
+          await speak(`I will ${planDescription.toLowerCase()}`, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
+        }
+      } else if (planDescription) {
+        // Log plan even if explanation was spoken
+        console.log(`\n📋 Plan: ${planDescription}`);
       }
     } else {
       // Fallback to simple router
@@ -81,16 +107,20 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
       params = plan.params;
       planDescription = plan.description;
       requiresConfirmation = plan.requiresConfirmation;
+      
+      // Speak plan description for non-agent mode
+      console.log(`\n📋 Plan: ${planDescription}`);
+      if (!mute) {
+        await speak(`I will ${planDescription.toLowerCase()}`, { play: !mute, keepAudio: options.keepAudio, player: options.player });
+      }
     }
-    
-    console.log(`\n📋 Plan: ${planDescription}`);
     
     // Handle special intents that don't require execution
     if (intent === Intent.HELP) {
       const helpText = getHelpText();
       console.log(helpText);
       if (!mute) {
-        await speak(helpText, mute);
+        await speak(helpText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
       }
       return;
     }
@@ -99,7 +129,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
       const unknownText = `I didn't understand that. Try saying "help" for available commands.`;
       console.log(unknownText);
       if (!mute) {
-        await speak(unknownText, mute);
+        await speak(unknownText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
       }
       return;
     }
@@ -116,7 +146,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
       }
       console.log(`❌ ${errorText}`);
       if (!mute) {
-        await speak(errorText, mute);
+        await speak(errorText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
       }
       return;
     }
@@ -135,7 +165,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
         const cancelledText = 'Action cancelled.';
         console.log(`❌ ${cancelledText}`);
         if (!mute) {
-          await speak(cancelledText, mute);
+          await speak(cancelledText, { play: !mute, keepAudio: options.keepAudio, player: options.player });
         }
         return;
       }
@@ -151,7 +181,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
     
     // Step 9: Speak
     if (!mute) {
-      await speak(summary, mute);
+      await speak(summary, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
     }
     
     // Show full output if verbose
@@ -168,7 +198,7 @@ export async function listenMode(repoPath: string, mute: boolean, useAgent: bool
     console.error('❌ Error:', error);
     const errorText = `An error occurred: ${error instanceof Error ? error.message : 'Unknown error'}`;
     if (!mute) {
-      await speak(errorText, mute);
+      await speak(errorText, { play: !mute, keepAudio: options.keepAudio, player: options.player });
     }
     process.exit(1);
   }

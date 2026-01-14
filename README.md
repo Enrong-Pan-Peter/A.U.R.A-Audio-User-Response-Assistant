@@ -6,7 +6,7 @@ A voice-first developer assistant CLI tool for local git repositories. Control y
 
 - 🎤 **Voice Input**: Push-to-talk recording (up to 8 seconds per turn)
 - 🧠 **Intent-Based Commands**: Safe command execution via whitelist mapping
-- 🔊 **Text-to-Speech**: ElevenLabs integration for spoken responses
+- 🔊 **Text-to-Speech**: ElevenLabs integration for spoken responses with automatic audio playback
 - 💬 **Two Modes**:
   - `listen`: Single-turn command execution
   - `chat`: Multi-turn interactive session with memory
@@ -22,10 +22,17 @@ A voice-first developer assistant CLI tool for local git repositories. Control y
   - macOS: Built-in support
   - Linux: `sox` or `rec` (install via `sudo apt-get install sox` or `sudo yum install sox`)
   - Windows: `sox` (install from [sox.sourceforge.net](http://sox.sourceforge.net/))
-- **Audio Playback**:
-  - macOS: Built-in (`afplay`)
-  - Linux: `mpg123` or `aplay` (install via package manager)
-  - Windows: Built-in (Windows Media Player)
+- **Audio Playback** (required for TTS):
+  - **Recommended**: FFmpeg (includes `ffplay`) - enables streaming playback without saving files
+    - Download from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+    - Ensure `ffplay` is in your PATH
+    - Streaming mode (default): pipes audio directly to ffplay, no files created
+  - **Fallback** (file mode): If ffplay is not found, falls back to platform-specific players:
+    - macOS: Built-in (`afplay`) - automatically installed
+    - Linux: Install one of `mpg123`, `paplay` (PulseAudio), or `aplay` (ALSA)
+      - `sudo apt-get install mpg123` (Debian/Ubuntu)
+      - `sudo yum install mpg123` (RHEL/CentOS)
+    - Windows: Built-in (Windows Media Player via PowerShell) - automatically available
 
 ### Setup
 
@@ -65,6 +72,16 @@ pnpm dev listen
 pnpm dev listen --repo /path/to/repo
 # or
 pnpm dev listen --mute  # Disable TTS
+# or
+pnpm dev listen --no-play  # Disable audio playback
+# or
+pnpm dev listen --play-mode=stream  # Stream to ffplay (default, no files)
+# or
+pnpm dev listen --play-mode=file  # Save to file and play (fallback if ffplay not found)
+# or
+pnpm dev listen --keep-audio  # Keep audio files after playback (file mode only)
+# or
+pnpm dev listen --player "custom-player-command"  # Use custom player (file mode only)
 ```
 
 **Example flow:**
@@ -83,7 +100,17 @@ pnpm dev chat
 # or
 pnpm dev chat --repo /path/to/repo
 # or
-pnpm dev chat --mute  # Disable TTS
+pnpm dev chat --mute  # Disable TTS playback (same as --no-play)
+# or
+pnpm dev chat --no-play  # Disable audio playback
+# or
+pnpm dev chat --play-mode=stream  # Stream to ffplay (default, no files)
+# or
+pnpm dev chat --play-mode=file  # Save to file and play (fallback if ffplay not found)
+# or
+pnpm dev chat --keep-audio  # Keep audio files after playback (file mode only)
+# or
+pnpm dev chat --player "custom-player-command"  # Use custom player (file mode only)
 ```
 
 **Example flow:**
@@ -221,9 +248,21 @@ pnpm start listen
 
 ### Audio Playback Fails
 
-- **Linux**: Install `mpg123` for MP3 playback: `sudo apt-get install mpg123`
-- **Windows**: Should work with built-in Windows Media Player
+- **Streaming Mode (Default)**: Requires FFmpeg with `ffplay`
+  - Install FFmpeg from [ffmpeg.org/download.html](https://ffmpeg.org/download.html)
+  - Ensure `ffplay` is in your PATH
+  - If ffplay is not found, automatically falls back to file mode
+- **File Mode (Fallback)**: 
+  - **Linux**: Install one of the supported players:
+    - `mpg123` (recommended for MP3): `sudo apt-get install mpg123` or `sudo yum install mpg123`
+    - `paplay` (PulseAudio): Usually pre-installed on modern Linux distributions
+    - `aplay` (ALSA): Usually pre-installed
+  - **Windows**: Should work automatically with built-in Windows Media Player
+  - **macOS**: `afplay` is built-in and should work automatically
 - If playback fails, audio files are saved to temp directory (path is printed)
+- Use `--play-mode=file` to force file mode
+- Use `--player "your-command"` to specify a custom audio player (file mode only)
+- Use `--keep-audio` to preserve audio files for debugging (file mode only)
 
 ### Transcription Placeholder
 
@@ -233,7 +272,16 @@ The MVP uses a manual input placeholder. For production, integrate a real STT pr
 
 - Verify `ELEVENLABS_API_KEY` is set correctly
 - Check API quota/limits
-- Use `--mute` flag to disable TTS for testing
+- Use `--mute` or `--no-play` flag to disable TTS playback for testing
+
+### Audio Playback Options
+
+- **Default behavior**: TTS audio is automatically played after generation using streaming mode (pipes to ffplay, no files created)
+- **`--play-mode=stream`** (default): Stream audio directly to ffplay without saving files (requires FFmpeg)
+- **`--play-mode=file`**: Save audio to file and play using platform-specific player (fallback if ffplay not found)
+- **`--no-play` or `--mute`**: Disable automatic playback
+- **`--keep-audio`**: Keep audio files after playback (file mode only, default: files are auto-deleted after successful playback)
+- **`--player <command>`**: Use a custom audio player command (file mode only, overrides platform default)
 
 ## License
 

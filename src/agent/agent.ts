@@ -71,9 +71,11 @@ Analyze this request and return a JSON object with:
 - intent: one of the available intents
 - params: object with extracted parameters (e.g., {name: "branch-name"} for CREATE_BRANCH, {message: "commit message"} for MAKE_COMMIT)
 - planSteps: array of human-readable steps that will be executed (e.g., ["Check git status", "List modified files"])
-- explanation: optional explanation (especially for EXPLAIN_FAILURE intent)
+- explanation: a natural language explanation of what you will do (e.g., "I'll check the git status and show you any modified files" or "I'll run the test suite and report the results"). This will be spoken to the user, so make it conversational and clear.
 - confidence: number between 0 and 1
 - clarifyingQuestion: optional question if confidence < 0.6
+
+IMPORTANT: Always provide an "explanation" field with a clear, conversational description of what action will be taken. This explanation will be spoken aloud to the user.
 
 Return ONLY valid JSON, no markdown, no code blocks.`;
 
