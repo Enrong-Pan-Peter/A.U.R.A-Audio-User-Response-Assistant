@@ -1,9 +1,8 @@
-import { Intent } from '../intents/types.js';
 import { AgentResult } from '../agent/types.js';
-import { CommandTemplate } from '../exec/runner.js';
-import { SessionMemory } from '../session/memory.js';
-import { getDetails } from '../session/memory.js';
 import { explainFailureLLM } from '../intents/explainFailureLLM.js';
+import { Intent } from '../intents/types.js';
+import { CommandTemplate } from '../intents/whitelist.js';
+import { getDetails, SessionMemory } from '../session/memory.js';
 
 /**
  * Categorizes intents into informational (immediate response) vs action (requires execution).
@@ -177,10 +176,24 @@ async function handleActionIntent(
   if (!commandTemplate) {
     // If no command template, treat as info intent with error message
     let errorText: string;
-    if (intent === Intent.MAKE_COMMIT) {
-      errorText = 'Cannot commit: no staged changes. Please stage files first using git add.';
-    } else {
-      errorText = `Cannot execute ${intent}. Command not available or parameters missing.`;
+    switch (intent) {
+      case Intent.MAKE_COMMIT:
+        errorText = 'Cannot commit: no staged changes. Please stage files first using git add.';
+        break;
+      case Intent.RUN_TESTS:
+        errorText = 'Cannot run tests: no test script found in package.json. Add a "test" script to your package.json to enable this command.';
+        break;
+      case Intent.RUN_LINT:
+        errorText = 'Cannot run lint: no lint script found in package.json. Add a "lint" script to your package.json to enable this command.';
+        break;
+      case Intent.RUN_BUILD:
+        errorText = 'Cannot run build: no build script found in package.json. Add a "build" script to your package.json to enable this command.';
+        break;
+      case Intent.CREATE_BRANCH:
+        errorText = 'Cannot create branch: branch name is required. Please specify a branch name (e.g., "create branch feature-x").';
+        break;
+      default:
+        errorText = `Cannot execute ${intent}. Command not available or parameters missing.`;
     }
     
     // Return as info intent with error message
