@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.log
 .env
+.env.*
 *.mp3
 *.wav
 .DS_Store
