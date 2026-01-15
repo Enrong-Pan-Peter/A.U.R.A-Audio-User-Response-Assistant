@@ -79,6 +79,8 @@ pnpm dev listen --play-mode=stream  # Stream to ffplay (default, no files)
 # or
 pnpm dev listen --play-mode=file  # Save to file and play (fallback if ffplay not found)
 # or
+pnpm dev listen --play-mode=stream  # Stream to ffplay (requires FFmpeg, no files)
+# or
 pnpm dev listen --keep-audio  # Keep audio files after playback (file mode only)
 # or
 pnpm dev listen --player "custom-player-command"  # Use custom player (file mode only)
@@ -258,8 +260,9 @@ pnpm start listen
     - `paplay` (PulseAudio): Usually pre-installed on modern Linux distributions
     - `aplay` (ALSA): Usually pre-installed
   - **Windows**: Should work automatically with built-in Windows Media Player
+    - If PowerShell method fails, automatically falls back to `start` command
   - **macOS**: `afplay` is built-in and should work automatically
-- If playback fails, audio files are saved to temp directory (path is printed)
+  - If playback fails, audio files are saved to temp directory (path is printed)
 - Use `--play-mode=file` to force file mode
 - Use `--player "your-command"` to specify a custom audio player (file mode only)
 - Use `--keep-audio` to preserve audio files for debugging (file mode only)
@@ -276,10 +279,11 @@ The MVP uses a manual input placeholder. For production, integrate a real STT pr
 
 ### Audio Playback Options
 
-- **Default behavior**: TTS audio is automatically played after generation using streaming mode (pipes to ffplay, no files created)
-- **`--play-mode=stream`** (default): Stream audio directly to ffplay without saving files (requires FFmpeg)
-- **`--play-mode=file`**: Save audio to file and play using platform-specific player (fallback if ffplay not found)
-- **`--no-play` or `--mute`**: Disable automatic playback
+- **Default behavior**: TTS audio is automatically played after generation using file-based playback (saves to temp file, plays, then deletes)
+- **`--play-mode=file`** (default): Save audio to file and play using platform-specific player
+- **`--play-mode=stream`**: Stream audio directly to ffplay without saving files (requires FFmpeg)
+- **`--play` or default**: Audio playback is enabled by default
+- **`--no-play` or `--mute`**: Disable automatic playback (file is still saved)
 - **`--keep-audio`**: Keep audio files after playback (file mode only, default: files are auto-deleted after successful playback)
 - **`--player <command>`**: Use a custom audio player command (file mode only, overrides platform default)
 

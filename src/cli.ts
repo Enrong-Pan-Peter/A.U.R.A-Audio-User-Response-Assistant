@@ -21,6 +21,9 @@ program
   .option('--play-mode <mode>', 'Playback mode: stream (pipe to ffplay, no files) or file (save and play)', 'stream')
   .option('--keep-audio', 'Keep audio files after playback (only applies to file mode, default: auto-cleanup)')
   .option('--player <command>', 'Custom audio player command (only applies to file mode, overrides platform default)')
+  .option('--live', 'Enable live transcription with partial updates (default: true)')
+  .option('--no-live', 'Disable live transcription, use batch mode')
+  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 1000)', '1000')
   .option('--no-agent', 'Disable AI agent (use simple keyword matching)')
   .action(async (options) => {
     const repoPath = options.repo || process.cwd();
@@ -30,9 +33,11 @@ program
     const playMode = (options.playMode === 'file' || options.playMode === 'stream') 
       ? options.playMode 
       : 'stream';
+    const live = options.noLive ? false : (options.live !== false); // Default to true unless --no-live
+    const silenceMs = parseInt(options.silenceMs || '1000', 10);
     // Use agent if OPENAI_API_KEY is set and --no-agent flag is not present
     const useAgent = !!(process.env.OPENAI_API_KEY && options.agent !== false);
-    await listenMode(repoPath, mute, useAgent, { keepAudio, player, playMode });
+    await listenMode(repoPath, mute, useAgent, { keepAudio, player, playMode, live, silenceMs });
   });
 
 program
@@ -44,6 +49,9 @@ program
   .option('--play-mode <mode>', 'Playback mode: stream (pipe to ffplay, no files) or file (save and play)', 'stream')
   .option('--keep-audio', 'Keep audio files after playback (only applies to file mode, default: auto-cleanup)')
   .option('--player <command>', 'Custom audio player command (only applies to file mode, overrides platform default)')
+  .option('--live', 'Enable live transcription with partial updates (default: true)')
+  .option('--no-live', 'Disable live transcription, use batch mode')
+  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 1000)', '1000')
   .option('--no-agent', 'Disable AI agent (use simple keyword matching)')
   .action(async (options) => {
     const repoPath = options.repo || process.cwd();
@@ -53,9 +61,11 @@ program
     const playMode = (options.playMode === 'file' || options.playMode === 'stream') 
       ? options.playMode 
       : 'stream';
+    const live = options.noLive ? false : (options.live !== false); // Default to true unless --no-live
+    const silenceMs = parseInt(options.silenceMs || '1000', 10);
     // Use agent if OPENAI_API_KEY is set and --no-agent flag is not present
     const useAgent = !!(process.env.OPENAI_API_KEY && options.agent !== false);
-    await chatMode(repoPath, mute, useAgent, { keepAudio, player, playMode });
+    await chatMode(repoPath, mute, useAgent, { keepAudio, player, playMode, live, silenceMs });
   });
 
 program.parse();

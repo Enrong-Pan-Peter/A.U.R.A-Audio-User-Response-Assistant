@@ -9,11 +9,14 @@ import { summarize } from '../summarize/index.js';
 import { speak, PlayMode } from '../voice/tts.js';
 import { recordAudio, waitForPushToTalk } from '../voice/record.js';
 import { transcribe } from '../voice/transcribe.js';
+import { streamTranscribe } from '../voice/streamTranscribe.js';
 
 export interface ListenOptions {
   keepAudio?: boolean;
   player?: string;
   playMode?: PlayMode;
+  live?: boolean; // Enable live transcription (default: true)
+  silenceMs?: number; // Silence timeout in milliseconds (default: 1000)
 }
 
 /**
@@ -38,15 +41,52 @@ export async function listenMode(
     // Step 1: Wait for push-to-talk
     await waitForPushToTalk();
     
-    // Step 2: Record audio
-    console.log('🔴 Recording... (up to 8 seconds)');
-    const audioPath = await recordAudio({ durationSeconds: 8 });
-    console.log('✅ Recording complete');
+    // Step 2 & 3: Record and transcribe (with live transcription if enabled)
+    let transcription: string;
+    let audioPath: string | undefined;
     
-    // Step 3: Transcribe
-    console.log('📝 Transcribing...');
-    const transcription = await transcribe(audioPath);
-    console.log(`\n💬 Heard: "${transcription}"`);
+    const useLiveTranscription = options.live !== false; // Default to true
+    
+    if (useLiveTranscription) {
+      try {
+        console.log('🎤 Listening... (Press Enter to stop)');
+        const result = await streamTranscribe({
+          live: true,
+          silenceMs: options.silenceMs || 1000,
+        });
+        
+        transcription = result.transcript;
+        audioPath = result.audioPath;
+        
+        if (transcription) {
+          console.log(`\n💬 Heard: "${transcription}"`);
+        } else {
+          console.log('\n⚠️  No transcription received');
+          return;
+        }
+      } catch (error) {
+        console.error('❌ Streaming transcription failed:', error instanceof Error ? error.message : error);
+        // Fall back to batch transcription
+        console.log('⚠️  Falling back to batch transcription...');
+        try {
+          audioPath = await recordAudio({ durationSeconds: 8 });
+          transcription = await transcribe(audioPath);
+          console.log(`\n💬 Heard: "${transcription}"`);
+        } catch (fallbackError) {
+          console.error('❌ Batch transcription also failed:', fallbackError instanceof Error ? fallbackError.message : fallbackError);
+          throw fallbackError;
+        }
+      }
+    } else {
+      // Batch transcription (original behavior)
+      console.log('🔴 Recording... (up to 8 seconds)');
+      audioPath = await recordAudio({ durationSeconds: 8 });
+      console.log('✅ Recording complete');
+      
+      console.log('📝 Transcribing...');
+      transcription = await transcribe(audioPath);
+      console.log(`\n💬 Heard: "${transcription}"`);
+    }
     
     // Step 4: Plan using AI agent or fallback router
     let intent: Intent;
@@ -155,10 +195,26 @@ export async function listenMode(
     if (requiresConfirmation) {
       console.log('\n⚠️  This action requires confirmation.');
       await waitForPushToTalk();
-      console.log('🔴 Recording confirmation...');
-      const confirmAudioPath = await recordAudio({ durationSeconds: 5 });
-      const confirmText = await transcribe(confirmAudioPath);
-      console.log(`💬 Confirmation: "${confirmText}"`);
+      
+      let confirmText: string;
+      if (useLiveTranscription) {
+        console.log('🎤 Listening for confirmation... (Press Enter to stop)');
+        const result = await streamTranscribe({
+          live: true,
+          silenceMs: options.silenceMs || 1000,
+        });
+        confirmText = result.transcript;
+        if (confirmText) {
+          console.log(`💬 Confirmation: "${confirmText}"`);
+        } else {
+          confirmText = '';
+        }
+      } else {
+        console.log('🔴 Recording confirmation...');
+        const confirmAudioPath = await recordAudio({ durationSeconds: 5 });
+        confirmText = await transcribe(confirmAudioPath);
+        console.log(`💬 Confirmation: "${confirmText}"`);
+      }
       
       const normalized = confirmText.toLowerCase();
       if (!normalized.includes('confirm') && !normalized.includes('proceed') && !normalized.includes('yes')) {
