@@ -193,9 +193,15 @@ export async function chatMode(
         const plan = createPlan(intentResult);
         
         // Convert router result to agent result format for dispatcher
+        // For CODEBASE_QA, extract query from transcription
+        const params = plan.params || {};
+        if (plan.intent === Intent.CODEBASE_QA && !params.query) {
+          params.query = transcription;
+        }
+        
         const mockAgentResult = {
           intent: plan.intent,
-          params: plan.params,
+          params,
           planSteps: [plan.description],
           explanation: undefined,
           confidence: intentResult.confidence,

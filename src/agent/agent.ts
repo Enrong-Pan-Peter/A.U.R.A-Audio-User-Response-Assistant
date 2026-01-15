@@ -58,6 +58,7 @@ Available intents:
 - MAKE_COMMIT: Create git commit (requires params.message)
 - EXPLAIN_FAILURE: Explain why last command failed
 - DETAILS: Show more details about last output
+- CODEBASE_QA: Answer questions about the codebase (requires params.query)
 - REPEAT_LAST: Repeat last summary
 - HELP: Show help
 - EXIT: Exit the application
@@ -69,13 +70,18 @@ ${sessionMemory.lastAction ? `Last action: ${sessionMemory.lastAction}` : ''}`;
 
 Analyze this request and return a JSON object with:
 - intent: one of the available intents
-- params: object with extracted parameters (e.g., {name: "branch-name"} for CREATE_BRANCH, {message: "commit message"} for MAKE_COMMIT)
+- params: object with extracted parameters:
+  * For CREATE_BRANCH: {name: "branch-name"}
+  * For MAKE_COMMIT: {message: "commit message"}
+  * For CODEBASE_QA: {query: "the user's question about the codebase"}
 - planSteps: array of human-readable steps that will be executed (e.g., ["Check git status", "List modified files"])
 - explanation: a natural language explanation of what you will do (e.g., "I'll check the git status and show you any modified files" or "I'll run the test suite and report the results"). This will be spoken to the user, so make it conversational and clear.
 - confidence: number between 0 and 1
 - clarifyingQuestion: optional question if confidence < 0.6
 
-IMPORTANT: Always provide an "explanation" field with a clear, conversational description of what action will be taken. This explanation will be spoken aloud to the user.
+IMPORTANT: 
+- Always provide an "explanation" field with a clear, conversational description of what action will be taken. This explanation will be spoken aloud to the user.
+- For CODEBASE_QA intent, extract the user's question and put it in params.query (e.g., if user says "where is recording timeout", set params.query to "where is recording timeout").
 
 Return ONLY valid JSON, no markdown, no code blocks.`;
 

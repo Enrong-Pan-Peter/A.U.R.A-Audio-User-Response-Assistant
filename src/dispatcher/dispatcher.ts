@@ -45,6 +45,7 @@ function categorizeIntent(intent: Intent): IntentCategory {
     Intent.DETAILS,
     Intent.HELP,
     Intent.REPEAT_LAST,
+    Intent.CODEBASE_QA,
     Intent.UNKNOWN,
     Intent.EXIT,
   ];
@@ -103,7 +104,7 @@ async function handleInfoIntent(
       break;
 
     case Intent.HELP:
-      responseText = 'Available commands: run tests, git status, run lint, run build, create branch, commit, explain failure, details, repeat, help, exit.';
+      responseText = 'Available commands: run tests, git status, run lint, run build, create branch, commit, explain failure, details, codebase questions (e.g., "where is X", "how does Y work"), repeat, help, exit.';
       break;
 
     case Intent.REPEAT_LAST:
@@ -111,6 +112,32 @@ async function handleInfoIntent(
         responseText = memory.lastSummary;
       } else {
         responseText = 'No previous summary to repeat.';
+      }
+      break;
+
+    case Intent.CODEBASE_QA:
+      // Extract query from agent result params or planSteps
+      // The agent should extract the query from the user's question
+      const query = agentResult.params?.query || 
+                   agentResult.planSteps.join(' ') || 
+                   'codebase question';
+      
+      console.log(`🔍 Answering codebase question: "${query}"`);
+      const { answerCodebaseQuestion } = await import('../intents/codebaseQA.js');
+      const qaResult = await answerCodebaseQuestion(query, process.cwd());
+      responseText = qaResult.answer;
+      
+      // Add file references if available (but don't duplicate if already in answer)
+      if (qaResult.referencedFiles.length > 0 && !responseText.includes('Referenced files')) {
+        const fileRefs = qaResult.referencedFiles
+          .map(ref => `  - ${ref.file} (lines ${ref.lines.join(', ')})`)
+          .join('\n');
+        responseText += `\n\n**Referenced files:**\n${fileRefs}`;
+      }
+      
+      // Add follow-up suggestion if available
+      if (qaResult.followUpSuggestion && !responseText.includes(qaResult.followUpSuggestion)) {
+        responseText += `\n\n${qaResult.followUpSuggestion}`;
       }
       break;
 

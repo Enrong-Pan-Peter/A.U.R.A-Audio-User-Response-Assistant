@@ -32,6 +32,11 @@ export function routeIntent(text: string): IntentResult {
     return { intent: Intent.EXPLAIN_FAILURE, confidence: 1.0 };
   }
   
+  // Codebase Q&A
+  if (matches(normalized, ['where is', 'where does', 'how does', 'explain this', 'find', 'search for', 'show me', 'what is', 'codebase', 'repo', 'repository', 'file', 'function', 'class', 'implementation'])) {
+    return { intent: Intent.CODEBASE_QA, params: { query: text }, confidence: 0.8 };
+  }
+  
   // Run tests
   if (matches(normalized, ['run tests', 'test', 'tests', 'run test suite', 'execute tests'])) {
     return { intent: Intent.RUN_TESTS, confidence: 0.9 };
