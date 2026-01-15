@@ -9,6 +9,12 @@ export interface RecordingOptions {
   sampleRate?: number;
 }
 
+export interface StreamingOptions {
+  sampleRate?: number;
+  onChunk?: (chunk: Buffer) => void;
+  onError?: (error: Error) => void;
+}
+
 /**
  * Records audio from the microphone using FFmpeg.
  * Returns the path to the saved WAV file.
@@ -171,6 +177,141 @@ export async function recordAudio(options: RecordingOptions = {}): Promise<strin
       }
     }, (durationSeconds + 2) * 1000);
   });
+}
+
+/**
+ * Streams audio from the microphone continuously.
+ * Yields audio chunks as they arrive without saving to disk.
+ * 
+ * @param options - Streaming options
+ * @returns Promise that resolves when streaming starts, returns cleanup function
+ */
+export async function streamAudio(options: StreamingOptions = {}): Promise<() => void> {
+  const sampleRate = options.sampleRate || 16000;
+  
+  // On Windows, get the microphone device name
+  let micName: string | undefined;
+  if (process.platform === 'win32') {
+    if (process.env.DEVVOICE_MIC) {
+      micName = process.env.DEVVOICE_MIC;
+    } else {
+      try {
+        const devices = await listAudioDevices();
+        if (devices.length > 0) {
+          micName = devices[0];
+        }
+      } catch (error) {
+        // If listing fails, we'll throw an error below
+      }
+    }
+    
+    if (!micName) {
+      throw new Error(
+        'No microphone device found. Please set DEVVOICE_MIC environment variable with your microphone name, ' +
+        'or ensure a microphone is connected and accessible.'
+      );
+    }
+  }
+
+  // Build FFmpeg arguments for streaming (no duration limit, output to stdout)
+  const args: string[] = [];
+  
+  if (process.platform === 'win32') {
+    args.push(
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-f', 'dshow',
+      '-i', `audio=${micName}`,
+      '-ac', '1',                    // Mono
+      '-ar', sampleRate.toString(),   // Sample rate
+      '-acodec', 'pcm_s16le',        // 16-bit PCM
+      '-f', 's16le',                 // Raw PCM format
+      '-'                            // Output to stdout
+    );
+  } else {
+    args.push(
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-f', 'alsa',
+      '-i', 'default',
+      '-ac', '1',
+      '-ar', sampleRate.toString(),
+      '-acodec', 'pcm_s16le',
+      '-f', 's16le',
+      '-'
+    );
+  }
+
+  // Spawn FFmpeg process
+  const ffmpeg = spawn('ffmpeg', args, {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, stdout piped for audio data
+  });
+
+  // #region agent log
+  fetch('http://127.0.0.1:7243/ingest/1e40d4a9-c2e9-421f-955d-44febad8f877',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'record.ts:207',message:'FFmpeg spawned for streaming',data:{args:args.join(' ')},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+  // #endregion
+
+  // Handle audio chunks from stdout
+  ffmpeg.stdout?.on('data', (chunk: Buffer) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/1e40d4a9-c2e9-421f-955d-44febad8f877',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'record.ts:212',message:'FFmpeg audio chunk',data:{chunkSize:chunk.length,hasOnChunk:!!options.onChunk},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    if (options.onChunk) {
+      options.onChunk(chunk);
+    }
+  });
+
+  // Handle errors
+  let stderrOutput = '';
+  ffmpeg.stderr?.on('data', (data: Buffer) => {
+    stderrOutput += data.toString();
+  });
+
+  ffmpeg.on('error', (err: Error) => {
+    const errorMsg = err.message.includes('ENOENT') || err.message.includes('spawn')
+      ? 'FFmpeg not found. Please install FFmpeg and ensure it is in your PATH.'
+      : err.message;
+    
+    if (options.onError) {
+      options.onError(new Error(errorMsg));
+    }
+  });
+
+  // Return cleanup function
+  return () => {
+    // #region agent log
+    fetch('http://127.0.0.1:7243/ingest/1e40d4a9-c2e9-421f-955d-44febad8f877',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'record.ts:282',message:'Cleanup function called',data:{killed:ffmpeg.killed,pid:ffmpeg.pid},timestamp:Date.now(),sessionId:'debug-session',runId:'run6',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
+    if (!ffmpeg.killed && ffmpeg.pid) {
+      try {
+        // Kill immediately with SIGKILL on Windows, SIGTERM on Unix
+        if (process.platform === 'win32') {
+          // On Windows, use taskkill for more reliable termination
+          try {
+            spawn('taskkill', ['/F', '/T', '/PID', ffmpeg.pid.toString()], { windowsHide: true });
+          } catch (err) {
+            // Fallback to kill if taskkill fails
+            ffmpeg.kill('SIGKILL');
+          }
+        } else {
+          ffmpeg.kill('SIGTERM');
+          setTimeout(() => {
+            if (!ffmpeg.killed && ffmpeg.pid) {
+              ffmpeg.kill('SIGKILL');
+            }
+          }, 100); // Shorter timeout for faster cleanup
+        }
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/1e40d4a9-c2e9-421f-955d-44febad8f877',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'record.ts:295',message:'FFmpeg kill signal sent',data:{pid:ffmpeg.pid},timestamp:Date.now(),sessionId:'debug-session',runId:'run6',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+      } catch (err) {
+        // #region agent log
+        fetch('http://127.0.0.1:7243/ingest/1e40d4a9-c2e9-421f-955d-44febad8f877',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'record.ts:300',message:'FFmpeg kill error',data:{error:err instanceof Error?err.message:String(err)},timestamp:Date.now(),sessionId:'debug-session',runId:'run6',hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
+      }
+    }
+  };
 }
 
 /**

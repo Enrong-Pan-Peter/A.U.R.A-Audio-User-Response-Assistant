@@ -24,11 +24,15 @@
     "commander": "^11.1.0",
     "dotenv": "^16.4.5",
     "node-record-lpcm16": "^1.0.1",
-    "wav": "^1.0.2"
+    "openai": "^4.104.0",
+    "speaker": "^0.5.4",
+    "wav": "^1.0.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/wav": "^1.0.2",
+    "@types/ws": "^8.5.13",
     "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }

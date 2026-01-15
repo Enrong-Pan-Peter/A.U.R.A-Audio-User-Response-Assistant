@@ -175,6 +175,14 @@ export function createPlan(intentResult: IntentResult): CommandPlan {
       description: 'Unknown command',
       requiresConfirmation: false,
     },
+    [Intent.SWITCH_TO_INTERACTIVE_MODE]: {
+      description: 'Switch to interactive/continuous conversation mode',
+      requiresConfirmation: false,
+    },
+    [Intent.EXIT_INTERACTIVE_MODE]: {
+      description: 'Exit interactive mode and return to push-to-talk mode',
+      requiresConfirmation: false,
+    },
   };
   
   return {

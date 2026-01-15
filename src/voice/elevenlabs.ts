@@ -3,6 +3,7 @@
  */
 
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
+const ELEVENLABS_WS_BASE = 'wss://api.elevenlabs.io/v1';
 
 /**
  * Gets the ElevenLabs API key from environment variables.
@@ -39,4 +40,32 @@ export async function elevenFetch(
     ...init,
     headers,
   });
+}
+
+/**
+ * Gets the WebSocket URL for ElevenLabs real-time STT API.
+ */
+export function getRealtimeSTTWebSocketUrl(): string {
+  return `${ELEVENLABS_WS_BASE}/speech-to-text/realtime`;
+}
+
+/**
+ * Gets the WebSocket URL for ElevenLabs real-time TTS API.
+ * 
+ * @param voiceId - Voice ID to use for TTS
+ * @param modelId - Model ID to use for TTS (optional, defaults to eleven_turbo_v2_5)
+ */
+export function getRealtimeTTSWebSocketUrl(voiceId: string, modelId?: string): string {
+  const model = modelId || 'eleven_turbo_v2_5';
+  return `${ELEVENLABS_WS_BASE}/text-to-speech/${voiceId}/stream-input?model_id=${model}`;
+}
+
+/**
+ * Creates WebSocket connection headers for ElevenLabs API authentication.
+ */
+export function getElevenLabsWebSocketHeaders(): Record<string, string> {
+  const apiKey = getElevenLabsApiKey();
+  return {
+    'xi-api-key': apiKey,
+  };
 }

@@ -28,16 +28,18 @@ program
 
 program
   .command('chat')
-  .description('Multi-turn interactive voice chat')
+  .description('Multi-turn interactive voice chat with real-time streaming')
   .option('--repo <path>', 'Repository path (default: current directory)')
   .option('--mute', 'Disable text-to-speech output')
   .option('--no-agent', 'Disable AI agent (use simple keyword matching)')
+  .option('--batch', 'Use batch STT/TTS instead of real-time streaming')
   .action(async (options) => {
     const repoPath = options.repo || process.cwd();
     const mute = options.mute || false;
-    // Use agent if OPENAI_API_KEY is set and --no-agent flag is not present
+    // Always use OpenAI agent if OPENAI_API_KEY is set (unless --no-agent flag is present)
     const useAgent = !!(process.env.OPENAI_API_KEY && options.agent !== false);
-    await chatMode(repoPath, mute, useAgent);
+    const useRealtime = !options.batch; // Use real-time by default
+    await chatMode(repoPath, mute, useAgent, useRealtime);
   });
 
 program.parse();

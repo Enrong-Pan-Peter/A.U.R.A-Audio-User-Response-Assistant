@@ -50,7 +50,7 @@ export async function transcribeAudio(wavPath: string): Promise<string> {
       );
     }
 
-    const result = await response.json();
+    const result = await response.json() as any;
     
     // Handle response format
     // The API can return either { text: "..." } or { transcripts: { channel_0: "..." } }
