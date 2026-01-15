@@ -5,6 +5,7 @@ import { createPlan, routeIntent } from '../intents/router.js';
 import { Intent } from '../intents/types.js';
 import { getCommandForIntent } from '../intents/whitelist.js';
 import { createMemory } from '../session/memory.js';
+import { applyStyleDirective } from '../session/responseStyle.js';
 import { summarize } from '../summarize/index.js';
 import { speak, PlayMode } from '../voice/tts.js';
 import { recordAudio, waitForPushToTalk } from '../voice/record.js';
@@ -38,6 +39,8 @@ export async function listenMode(
     process.exit(1);
   }
   
+  const memory = createMemory(); // Empty memory for single-turn mode
+
   try {
     // Step 1: Wait for push-to-talk
     await waitForPushToTalk();
@@ -89,12 +92,28 @@ export async function listenMode(
       console.log(`\n💬 Heard: "${transcription}"`);
     }
     
+    // Apply response style directives (e.g., "be detailed", "short")
+    const styleDirective = applyStyleDirective(transcription, memory.responseStyle);
+    if (styleDirective.changed) {
+      memory.responseStyle = styleDirective.style;
+      if (styleDirective.onlyDirective) {
+        const ackText = styleDirective.ackText || 'Got it.';
+        console.log(`\n💬 ${ackText}`);
+        if (!mute) {
+          await speak(ackText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
+        }
+        return;
+      }
+      if (styleDirective.cleanedText) {
+        transcription = styleDirective.cleanedText;
+      }
+    }
+
     // Step 4: Plan using AI agent or fallback router
     let intent: Intent;
     let params: Record<string, string> | undefined;
     let planDescription: string;
     let requiresConfirmation = false;
-    const memory = createMemory(); // Empty memory for single-turn mode
     
     if (useAgent && process.env.OPENAI_API_KEY) {
       console.log('🤖 Using AI agent for planning...');

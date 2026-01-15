@@ -1,6 +1,7 @@
 import { Intent } from '../intents/types.js';
 import { ExecutionResult } from '../exec/runner.js';
 import { LastRun } from '../intents/explainFailure.js';
+import { DEFAULT_RESPONSE_STYLE, ResponseStyle } from './responseStyle.js';
 
 /**
  * Session memory for chat mode.
@@ -21,6 +22,7 @@ export interface SessionMemory {
   lastRun: LastRun | null; // Store detailed last run info for failure analysis
   lastAssistantQuestion?: string; // Store follow-up question from assistant for context
   inDiagnosisMode?: boolean; // Track if we're in a diagnosis conversation
+  responseStyle: ResponseStyle;
 }
 
 export function createMemory(): SessionMemory {
@@ -34,6 +36,7 @@ export function createMemory(): SessionMemory {
     lastRun: null,
     lastAssistantQuestion: undefined,
     inDiagnosisMode: false,
+    responseStyle: { ...DEFAULT_RESPONSE_STYLE },
   };
 }
 

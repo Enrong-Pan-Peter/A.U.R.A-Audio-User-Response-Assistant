@@ -1,6 +1,12 @@
 import { Intent } from '../intents/types.js';
 import { SessionMemory } from '../session/memory.js';
 import { AgentResult } from './types.js';
+import {
+  DEFAULT_RESPONSE_STYLE,
+  getMaxSentences,
+  limitToSentences,
+  normalizeResponseText,
+} from '../session/responseStyle.js';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
@@ -39,6 +45,7 @@ async function openAIAgent(
   const availableIntents = Object.values(Intent).filter(
     intent => intent !== Intent.UNKNOWN
   );
+  const responseStyle = sessionMemory.responseStyle || DEFAULT_RESPONSE_STYLE;
 
   const systemPrompt = `You are a helpful developer assistant that understands voice commands for git and development tasks.
 
@@ -48,6 +55,7 @@ CRITICAL RULES:
 3. Extract parameters like branch names and commit messages from user text
 4. Return JSON with: intent, params (object), planSteps (array of strings), explanation (optional), confidence (0-1)
 5. If confidence < 0.6, include a clarifyingQuestion instead of executing
+6. When writing the "explanation" field, keep it concise and conversational by default (2-4 sentences max)
 
 Available intents:
 - RUN_TESTS: Run test suite
@@ -82,6 +90,7 @@ Analyze this request and return a JSON object with:
 IMPORTANT: 
 - Always provide an "explanation" field with a clear, conversational description of what action will be taken. This explanation will be spoken aloud to the user.
 - For CODEBASE_QA intent, extract the user's question and put it in params.query (e.g., if user says "where is recording timeout", set params.query to "where is recording timeout").
+ - responseStyle.mode is "${responseStyle.mode}" and responseStyle.verbosity is "${responseStyle.verbosity}". Keep the explanation aligned with that.
 
 Return ONLY valid JSON, no markdown, no code blocks.`;
 
@@ -166,9 +175,11 @@ async function mockAgent(
   const planSteps = generatePlanSteps(plan.intent, plan.params);
   
   // Generate explanation if it's an EXPLAIN_FAILURE intent
+  const style = sessionMemory.responseStyle || DEFAULT_RESPONSE_STYLE;
   let explanation: string | undefined;
   if (plan.intent === Intent.EXPLAIN_FAILURE && sessionMemory.lastFailure) {
     explanation = `The last command (${sessionMemory.lastFailure.intent}) failed with exit code ${sessionMemory.lastFailure.exitCode}. ${sessionMemory.lastFailure.stderr || sessionMemory.lastFailure.stdout || 'No additional error details available.'}`;
+    explanation = limitToSentences(normalizeResponseText(explanation), getMaxSentences(style));
   }
   
   return {

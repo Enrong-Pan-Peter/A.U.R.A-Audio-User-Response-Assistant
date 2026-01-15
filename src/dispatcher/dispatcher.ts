@@ -3,6 +3,7 @@ import { explainFailureLLM } from '../intents/explainFailureLLM.js';
 import { Intent } from '../intents/types.js';
 import { CommandTemplate } from '../intents/whitelist.js';
 import { getDetails, SessionMemory } from '../session/memory.js';
+import { DEFAULT_RESPONSE_STYLE, shouldIncludeSnippets } from '../session/responseStyle.js';
 
 /**
  * Categorizes intents into informational (immediate response) vs action (requires execution).
@@ -66,12 +67,14 @@ async function handleInfoIntent(
     case Intent.EXPLAIN_FAILURE:
       // Generate conversational explanation from lastRun if available
       if (memory.lastRun) {
+        const style = memory.responseStyle || DEFAULT_RESPONSE_STYLE;
         responseText = await explainFailureLLM(
           memory.lastRun.command,
           memory.lastRun.cwd,
           memory.lastRun.exitCode,
           memory.lastRun.stderr,
-          memory.lastRun.stdout
+          memory.lastRun.stdout,
+          style
         );
         // Enter diagnosis mode for follow-up questions
         memory.inDiagnosisMode = true;
@@ -80,13 +83,15 @@ async function handleInfoIntent(
           memory.lastAssistantQuestion = responseText;
         }
       } else if (memory.lastFailure) {
+        const style = memory.responseStyle || DEFAULT_RESPONSE_STYLE;
         // Fallback: use lastFailure data
         responseText = await explainFailureLLM(
           `Last ${memory.lastFailure.intent}`,
           process.cwd(),
           memory.lastFailure.exitCode,
           memory.lastFailure.stderr,
-          memory.lastFailure.stdout
+          memory.lastFailure.stdout,
+          style
         );
         memory.inDiagnosisMode = true;
         if (responseText.includes('?') || responseText.toLowerCase().includes('would you like')) {
@@ -120,14 +125,19 @@ async function handleInfoIntent(
       const query = agentResult.params?.query || 
                    agentResult.planSteps.join(' ') || 
                    'codebase question';
+      const style = memory.responseStyle || DEFAULT_RESPONSE_STYLE;
+      const includeSnippets = shouldIncludeSnippets(query, style);
       
       console.log(`🔍 Answering codebase question: "${query}"`);
       const { answerCodebaseQuestion } = await import('../intents/codebaseQA.js');
-      const qaResult = await answerCodebaseQuestion(query, process.cwd());
+      const qaResult = await answerCodebaseQuestion(query, process.cwd(), {
+        responseStyle: style,
+        includeSnippets,
+      });
       responseText = qaResult.answer;
       
       // Add file references if available (but don't duplicate if already in answer)
-      if (qaResult.referencedFiles.length > 0 && !responseText.includes('Referenced files')) {
+      if (includeSnippets && qaResult.referencedFiles.length > 0 && !responseText.includes('Referenced files')) {
         const fileRefs = qaResult.referencedFiles
           .map(ref => `  - ${ref.file} (lines ${ref.lines.join(', ')})`)
           .join('\n');
@@ -135,7 +145,7 @@ async function handleInfoIntent(
       }
       
       // Add follow-up suggestion if available
-      if (qaResult.followUpSuggestion && !responseText.includes(qaResult.followUpSuggestion)) {
+      if (qaResult.followUpSuggestion && !responseText.includes(qaResult.followUpSuggestion) && style.verbosity !== 'short') {
         responseText += `\n\n${qaResult.followUpSuggestion}`;
       }
       break;

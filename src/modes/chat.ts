@@ -6,6 +6,7 @@ import { createPlan, routeIntent } from '../intents/router.js';
 import { Intent } from '../intents/types.js';
 import { getConfirmation } from '../session/confirmation.js';
 import { createMemory, updateMemory } from '../session/memory.js';
+import { applyStyleDirective } from '../session/responseStyle.js';
 import { AppState, PendingAction } from '../session/state.js';
 import { summarize } from '../summarize/index.js';
 import { recordAudio, waitForPushToTalk } from '../voice/record.js';
@@ -211,6 +212,21 @@ export async function chatMode(
         }
       }
       
+      // Apply response style directives (e.g., "be detailed", "short")
+      const styleDirective = applyStyleDirective(transcription, memory.responseStyle);
+      if (styleDirective.changed) {
+        memory.responseStyle = styleDirective.style;
+        if (styleDirective.onlyDirective) {
+          const ackText = styleDirective.ackText || 'Got it.';
+          console.log(`\n💬 ${ackText}`);
+          await safeSpeak(ackText, mute, options);
+          continue;
+        }
+        if (styleDirective.cleanedText) {
+          transcription = styleDirective.cleanedText;
+        }
+      }
+
       // Step 4: Plan using AI agent or fallback router
       // Step 4: Plan using AI agent or fallback router and dispatch
       let dispatchedResult: DispatchedResult;

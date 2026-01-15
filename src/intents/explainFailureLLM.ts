@@ -3,6 +3,13 @@
  */
 
 import { extractRelevantErrors } from '../utils/extractRelevantErrors.js';
+import {
+  DEFAULT_RESPONSE_STYLE,
+  ResponseStyle,
+  getMaxSentences,
+  limitToSentences,
+  normalizeResponseText,
+} from '../session/responseStyle.js';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
@@ -22,36 +29,35 @@ function getFastPathExplanation(
   command: string,
   exitCode: number | null,
   stderr: string,
-  stdout: string
+  stdout: string,
+  style: ResponseStyle
 ): string | null {
   const combined = (stderr + '\n' + stdout).toLowerCase();
   
   // pnpm not found
   if (combined.includes('spawn pnpm') && combined.includes('enoent')) {
-    return `It looks like **pnpm** isn't installed or not available in your PATH.
-
-Here's how to fix it:
-
-**Windows:**
-1. Enable corepack: \`corepack enable\`
-2. Or install pnpm globally: \`npm install -g pnpm\`
-3. Close and reopen your terminal
-4. Verify: \`pnpm -v\`
-5. Check PATH: \`where pnpm\` (Windows) or \`which pnpm\` (Mac/Linux)
-
-Would you like me to check if pnpm is in your PATH by running \`where pnpm\`?`;
+    return formatFailureResponse(
+      {
+        cause: "Looks like your terminal can't find pnpm (not in PATH).",
+        fix: 'Enable Corepack or install pnpm, then rerun your command.',
+        verify: 'where pnpm',
+        question: 'Want me to check it for you?',
+      },
+      style
+    );
   }
   
   // npm not found
   if (combined.includes('spawn npm') && combined.includes('enoent')) {
-    return `**npm** isn't found in your PATH. This usually means Node.js isn't installed or not properly configured.
-
-**To fix:**
-1. Install Node.js from https://nodejs.org/
-2. Restart your terminal
-3. Verify: \`node -v\` and \`npm -v\`
-
-Would you like me to check your Node.js installation?`;
+    return formatFailureResponse(
+      {
+        cause: "Your terminal can't find npm, so Node.js likely isn't installed or on PATH.",
+        fix: 'Install Node.js, then rerun the command.',
+        verify: 'node -v && npm -v',
+        question: 'Want me to check your Node.js install?',
+      },
+      style
+    );
   }
   
   // Module not found (common)
@@ -60,77 +66,61 @@ Would you like me to check your Node.js installation?`;
                         combined.match(/module not found: ([^\s]+)/i);
     const moduleName = moduleMatch ? moduleMatch[1] : 'a module';
     
-    return `The build failed because it can't find **${moduleName}**. This usually means:
-- The dependency isn't installed
-- The package.json is missing the dependency
-- node_modules needs to be refreshed
-
-**Quick fix:**
-\`\`\`
-npm install
-# or
-pnpm install
-# or
-yarn install
-\`\`\`
-
-After installing, try running the build again. If it still fails, the module might need to be added to your package.json dependencies.`;
+    return formatFailureResponse(
+      {
+        cause: `The build failed because it can't find ${moduleName}.`,
+        fix: 'Install dependencies (npm/pnpm/yarn install) and try again.',
+      },
+      style
+    );
   }
   
   // Permission denied
   if (combined.includes('permission denied') || combined.includes('eacces')) {
-    return `You're getting a **permission denied** error. This usually happens when:
-- A file or directory doesn't have the right permissions
-- You're trying to write to a protected location
-
-**To fix:**
-- On Mac/Linux: Check file permissions with \`ls -la\` and fix with \`chmod\`
-- On Windows: Run your terminal as Administrator if needed
-- Check if the file/directory is read-only
-
-Can you share which file or command is causing the permission issue?`;
+    return formatFailureResponse(
+      {
+        cause: 'You hit a permission denied error.',
+        fix: 'Fix file permissions or run the command with proper privileges.',
+        question: 'Want me to identify the exact file path?',
+      },
+      style
+    );
   }
   
   // Git: nothing to commit
   if (combined.includes('nothing to commit') && command.includes('git')) {
-    return `There's nothing to commit because no changes are staged.
-
-**To commit your changes:**
-\`\`\`
-git add <files>
-git commit -m "your message"
-\`\`\`
-
-Or to see what files have changed:
-\`\`\`
-git status
-\`\`\`
-
-Would you like me to check your git status?`;
+    return formatFailureResponse(
+      {
+        cause: "Git says there's nothing to commit because no changes are staged.",
+        fix: 'Stage your files with git add, then commit.',
+        verify: 'git status',
+        question: 'Want me to check git status?',
+      },
+      style
+    );
   }
   
   // Git: not a repository
   if (combined.includes('not a git repository')) {
-    return `You're not in a git repository. 
-
-**To initialize one:**
-\`\`\`
-git init
-\`\`\`
-
-Or navigate to an existing repository directory.`;
+    return formatFailureResponse(
+      {
+        cause: "You're not in a git repository.",
+        fix: 'Run git init or move into an existing repo folder.',
+      },
+      style
+    );
   }
   
   // TypeScript/compilation errors
   if (combined.includes('typescript') && (combined.includes('error ts') || combined.includes('type error'))) {
-    return `You have **TypeScript compilation errors**. The build is failing because of type mismatches or syntax issues.
-
-**To fix:**
-1. Check the specific file and line number mentioned in the error
-2. Fix the type error (often missing types, wrong types, or undefined values)
-3. Run the build again
-
-The error output above should show the exact file and line. Would you like me to help identify the specific error?`;
+    return formatFailureResponse(
+      {
+        cause: 'TypeScript compilation failed due to a type or syntax error.',
+        fix: 'Open the file/line from the error output and fix the type issue.',
+        question: 'Want me to locate the exact file and line?',
+      },
+      style
+    );
   }
   
   return null; // No fast path match
@@ -152,37 +142,52 @@ export async function explainFailureLLM(
   cwd: string,
   exitCode: number | null,
   stderr: string,
-  stdout: string
+  stdout: string,
+  style: ResponseStyle = DEFAULT_RESPONSE_STYLE
 ): Promise<string> {
   // Try fast path first
-  const fastPath = getFastPathExplanation(command, exitCode, stderr, stdout);
+  const fastPath = getFastPathExplanation(command, exitCode, stderr, stdout, style);
   if (fastPath) {
-    return fastPath;
+    return finalizeFailureResponse(fastPath, style);
   }
   
   // If no OpenAI API key, fall back to simple explanation
   if (!OPENAI_API_KEY) {
-    return generateSimpleExplanation(command, exitCode, stderr, stdout);
+    return generateSimpleExplanation(command, exitCode, stderr, stdout, style);
   }
   
   // Extract relevant errors
   const errorContext = extractRelevantErrors(stderr, stdout, 1500);
   
   if (errorContext.relevantLines.length === 0) {
-    return `The command \`${command}\` failed with exit code ${exitCode ?? 'unknown'}, but I couldn't find specific error messages in the output. 
-
-Check the full output above for details, or try running the command again with more verbose logging.`;
+    return finalizeFailureResponse(
+      formatFailureResponse(
+        {
+          cause: `The command ${command} failed, but I couldn't find a clear error line.`,
+          fix: 'Try rerunning it with verbose logging or share the full output.',
+        },
+        style
+      ),
+      style
+    );
   }
   
   // Build LLM prompt
-  const systemPrompt = `You are a helpful developer assistant. When a command fails, provide a clear, conversational explanation that:
-1. Summarizes the root cause in plain English (1-2 sentences)
-2. Quotes only the most relevant error line(s) as evidence
-3. Provides clear, copy-paste ready fix steps
-4. Asks at most ONE follow-up question if needed
-5. Optionally offers to perform an auto-fix action (e.g., "I can run X—confirm?")
+  const systemPrompt = `You are a helpful developer assistant. Respond in a human, conversational tone.
 
-Be concise, friendly, and actionable. Don't dump logs—focus on what went wrong and how to fix it.`;
+Format for concise responses:
+1) Sentence 1: what happened + why (root cause)
+2) Sentence 2: simplest fix
+3) Sentence 3 (optional): quick verify command
+4) Sentence 4 (optional): one yes/no question like "Want me to run X?"
+
+Rules:
+- Default is concise: max 4 sentences.
+- No headers, no long lists, no code blocks unless asked.
+- Include only 1-2 most useful fixes.
+- If responseStyle.mode is "steps", you may use a short numbered list (max 3 items).
+- If responseStyle.mode is "logs", include the single most relevant error line.
+- If responseStyle.verbosity is "short", keep it to 1-2 sentences.`;
 
   const userPrompt = `The following command failed:
 
@@ -195,7 +200,11 @@ Be concise, friendly, and actionable. Don't dump logs—focus on what went wrong
 ${errorContext.relevantLines.join('\n')}
 \`\`\`
 
-Provide a helpful explanation of what went wrong and how to fix it. Be conversational and actionable.`;
+Provide a helpful explanation of what went wrong and how to fix it. Be conversational and actionable.
+
+responseStyle.mode: ${style.mode}
+responseStyle.verbosity: ${style.verbosity}
+Include snippets: no unless explicitly asked.`;
 
   try {
     const response = await fetch(OPENAI_API_URL, {
@@ -211,7 +220,7 @@ Provide a helpful explanation of what went wrong and how to fix it. Be conversat
           { role: 'user', content: userPrompt },
         ],
         temperature: 0.7,
-        max_tokens: 500,
+        max_tokens: style.mode === 'detailed' ? 500 : 220,
       }),
     });
 
@@ -228,10 +237,10 @@ Provide a helpful explanation of what went wrong and how to fix it. Be conversat
       }>;
     };
 
-    return data.choices[0].message.content.trim();
+    return finalizeFailureResponse(data.choices[0].message.content.trim(), style);
   } catch (error) {
     console.warn('⚠️  LLM explanation failed, using simple explanation:', error);
-    return generateSimpleExplanation(command, exitCode, stderr, stdout);
+    return generateSimpleExplanation(command, exitCode, stderr, stdout, style);
   }
 }
 
@@ -242,28 +251,70 @@ function generateSimpleExplanation(
   command: string,
   exitCode: number | null,
   stderr: string,
-  stdout: string
+  stdout: string,
+  style: ResponseStyle
 ): string {
   const errorContext = extractRelevantErrors(stderr, stdout, 500);
   
-  let explanation = `The command \`${command}\` failed`;
-  if (exitCode !== null) {
-    explanation += ` with exit code ${exitCode}`;
+  const logLine = errorContext.relevantLines[0];
+  const cause = exitCode !== null
+    ? `The command ${command} failed with exit code ${exitCode}.`
+    : `The command ${command} failed to start.`;
+
+  let fix = 'Try rerunning after installing dependencies or checking your environment.';
+  if (logLine && logLine.toLowerCase().includes('enoent')) {
+    fix = 'Make sure the command exists in your PATH and try again.';
   }
-  explanation += '.\n\n';
-  
-  if (errorContext.relevantLines.length > 0) {
-    explanation += '**Key errors:**\n';
-    errorContext.relevantLines.slice(0, 5).forEach(line => {
-      explanation += `- ${line}\n`;
-    });
-    explanation += '\n';
+
+  let response = formatFailureResponse(
+    {
+      cause,
+      fix,
+      verify: style.mode === 'logs' && logLine ? undefined : undefined,
+      question: undefined,
+    },
+    style
+  );
+
+  if (style.mode === 'logs' && logLine) {
+    response += ` Relevant error: ${logLine}.`;
   }
-  
-  explanation += 'Check the error output above for details. Common fixes:\n';
-  explanation += '- Install missing dependencies: `npm install` or `pnpm install`\n';
-  explanation += '- Check file permissions\n';
-  explanation += '- Verify the command syntax and required parameters\n';
-  
-  return explanation;
+
+  return finalizeFailureResponse(response, style);
+}
+
+function formatFailureResponse(
+  parts: { cause: string; fix: string; verify?: string; question?: string },
+  style: ResponseStyle
+): string {
+  if (style.mode === 'steps' && style.verbosity !== 'short') {
+    const steps = [parts.fix, parts.verify ? `Verify with ${parts.verify}` : undefined]
+      .filter(Boolean)
+      .slice(0, 3) as string[];
+    return `${parts.cause}\n${steps.map((step, i) => `${i + 1}) ${step}`).join('\n')}`;
+  }
+
+  const sentences = [
+    parts.cause.replace(/\.*\s*$/, '.'),
+    parts.fix.replace(/\.*\s*$/, '.'),
+  ];
+
+  if (parts.verify) {
+    sentences.push(`Quick check: ${parts.verify}.`);
+  }
+
+  if (parts.question) {
+    const question = parts.question.trim().endsWith('?')
+      ? parts.question.trim()
+      : `${parts.question.trim()}?`;
+    sentences.push(question);
+  }
+
+  return sentences.join(' ');
+}
+
+function finalizeFailureResponse(text: string, style: ResponseStyle): string {
+  const normalized = normalizeResponseText(text);
+  const maxSentences = getMaxSentences(style);
+  return limitToSentences(normalized, maxSentences);
 }

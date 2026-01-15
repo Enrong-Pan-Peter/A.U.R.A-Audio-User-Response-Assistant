@@ -4,6 +4,13 @@
 
 import { search, searchMultiple, extractSearchKeywords, SearchMatch } from '../tools/repoSearch.js';
 import { readFileWithContext, readFileHeadTail, getFileInfo } from '../tools/readFile.js';
+import {
+  DEFAULT_RESPONSE_STYLE,
+  ResponseStyle,
+  getMaxSentences,
+  limitToSentences,
+  normalizeResponseText,
+} from '../session/responseStyle.js';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
@@ -12,6 +19,11 @@ export interface CodebaseQAResult {
   answer: string;
   referencedFiles: Array<{ file: string; lines: number[] }>;
   followUpSuggestion?: string;
+}
+
+export interface CodebaseQAOptions {
+  responseStyle?: ResponseStyle;
+  includeSnippets?: boolean;
 }
 
 /**
@@ -112,29 +124,35 @@ async function generateAnswer(
   query: string,
   context: string,
   selectedFiles: Map<string, number[]>,
-  cwd: string
+  cwd: string,
+  options: CodebaseQAOptions
 ): Promise<CodebaseQAResult> {
+  const style = options.responseStyle || DEFAULT_RESPONSE_STYLE;
+  const includeSnippets = options.includeSnippets ?? false;
+
   if (!OPENAI_API_KEY) {
-    // Fallback: simple answer without LLM
+    const files = Array.from(selectedFiles.keys());
+    const shortList = files.slice(0, 3).join(', ');
+    const fallback = includeSnippets
+      ? `I found relevant code:\n\n${context}`
+      : `I found relevant code in ${files.length} file(s): ${shortList}. Want me to show the exact lines?`;
     return {
-      answer: `I found relevant code in the repository. Here's what I found:\n\n${context}\n\nTo get more details, you can ask me to "show me that file" or search for specific terms.`,
-      referencedFiles: Array.from(new Map(context.match(/File: ([^\n]+)/g)?.map(m => {
-        const file = m.replace('File: ', '');
-        return [file, []] as [string, number[]];
-      }) || [])),
+      answer: finalizeAnswer(fallback, style),
+      referencedFiles: Array.from(selectedFiles).map(([file, lines]) => ({ file, lines })),
     };
   }
 
-  const systemPrompt = `You are a helpful developer assistant that answers questions about codebases. 
+  const systemPrompt = `You are a helpful developer assistant that answers questions about codebases.
 
-When answering:
-1. Provide a clear, conversational explanation
-2. Reference specific files and line numbers from the provided context
-3. Quote only the most relevant code snippets (not huge dumps)
-4. Explain what the code does in plain English
-5. Offer ONE helpful follow-up suggestion (e.g., "Want me to show more of that file?" or "Want me to search for related code?")
-
-Be concise but thorough. Focus on answering the user's question directly.`;
+Rules:
+- Default to concise: max 4 sentences, no headers, no long lists.
+- Be natural and conversational.
+- Prefer explanation first, snippet second.
+- Only include code snippets if includeSnippets is true or it's necessary to answer.
+- Offer at most one short follow-up question.
+- If responseStyle.mode is "steps", you may use a short numbered list (max 3 items).
+- If responseStyle.mode is "logs", you may include a single short code snippet.
+- If responseStyle.verbosity is "short", keep it to 1-2 sentences.`;
 
   const userPrompt = `User asked: "${query}"
 
@@ -142,7 +160,11 @@ Here's relevant code from the repository:
 
 ${context}
 
-Please provide a helpful answer that references the specific files and lines shown above.`;
+Please provide a helpful answer that references the specific files and lines shown above.
+
+responseStyle.mode: ${style.mode}
+responseStyle.verbosity: ${style.verbosity}
+includeSnippets: ${includeSnippets ? 'yes' : 'no'}`;
 
   try {
     const response = await fetch(OPENAI_API_URL, {
@@ -175,7 +197,7 @@ Please provide a helpful answer that references the specific files and lines sho
       }>;
     };
 
-    const answer = data.choices[0].message.content.trim();
+    const answer = finalizeAnswer(data.choices[0].message.content.trim(), style);
     
     // Extract referenced files from context
     const referencedFiles: Array<{ file: string; lines: number[] }> = [];
@@ -200,7 +222,12 @@ Please provide a helpful answer that references the specific files and lines sho
   } catch (error) {
     console.warn('⚠️  LLM answer generation failed:', error);
     return {
-      answer: `I found relevant code in the repository:\n\n${context}\n\nTo get more details, you can ask me to "show me that file" or search for specific terms.`,
+      answer: finalizeAnswer(
+        includeSnippets
+          ? `I found relevant code:\n\n${context}`
+          : 'I found relevant code in the repo. Want me to show the exact lines?',
+        style
+      ),
       referencedFiles: Array.from(selectedFiles).map(([file, lines]) => ({ file, lines })),
     };
   }
@@ -218,7 +245,8 @@ let selectedFiles: Map<string, number[]> = new Map();
  */
 export async function answerCodebaseQuestion(
   query: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options: CodebaseQAOptions = {}
 ): Promise<CodebaseQAResult> {
   // Extract search keywords from query
   const keywords = extractSearchKeywords(query);
@@ -248,12 +276,18 @@ export async function answerCodebaseQuestion(
   const context = await buildContext(selectedFiles, cwd);
 
   // Generate answer using LLM
-  const result = await generateAnswer(query, context, selectedFiles, cwd);
+  const result = await generateAnswer(query, context, selectedFiles, cwd, options);
   
   // Update selectedFiles for potential follow-up
   selectedFiles = new Map(result.referencedFiles.map(ref => [ref.file, ref.lines]));
 
   return result;
+}
+
+function finalizeAnswer(text: string, style: ResponseStyle): string {
+  const normalized = normalizeResponseText(text);
+  const maxSentences = getMaxSentences(style);
+  return limitToSentences(normalized, maxSentences);
 }
 
 /**
