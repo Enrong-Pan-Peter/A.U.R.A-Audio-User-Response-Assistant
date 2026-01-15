@@ -7,6 +7,13 @@ import { elevenFetch, getElevenLabsApiKey } from './elevenlabs.js';
  * @param wavPath - Path to the WAV audio file to transcribe
  * @returns Promise resolving to the transcribed text
  */
+interface ElevenLabsSttResponse {
+  text?: string;
+  transcripts?: {
+    channel_0?: string;
+  };
+}
+
 export async function transcribeAudio(wavPath: string): Promise<string> {
   // Check API key first (will throw if missing)
   try {
@@ -50,7 +57,7 @@ export async function transcribeAudio(wavPath: string): Promise<string> {
       );
     }
 
-    const result = await response.json();
+    const result = (await response.json()) as ElevenLabsSttResponse;
     
     // Handle response format
     // The API can return either { text: "..." } or { transcripts: { channel_0: "..." } }

@@ -50,6 +50,50 @@ async function safeSpeak(
   }
 }
 
+function normalizeTranscript(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function detectInteractiveModeTrigger(text: string): boolean {
+  const normalized = normalizeTranscript(text);
+  const triggerPhrase = 'i need you to talk interactively to me';
+  if (normalized.includes(triggerPhrase)) {
+    return true;
+  }
+
+  if (!normalized.includes('interactive')) {
+    return false;
+  }
+
+  const triggerTokens = new Set(triggerPhrase.split(' '));
+  const inputTokens = new Set(normalized.split(' '));
+  let matches = 0;
+  triggerTokens.forEach((token) => {
+    if (inputTokens.has(token)) {
+      matches += 1;
+    }
+  });
+
+  return matches >= 6;
+}
+
+function detectExitInteractiveMode(text: string, intent?: Intent): boolean {
+  if (intent === Intent.EXIT) {
+    return false; // "exit" should quit via normal intent handling
+  }
+
+  const normalized = normalizeTranscript(text);
+  return (
+    normalized.includes('exit interactive mode') ||
+    normalized.includes('stop interactive mode') ||
+    normalized.includes('exit interactive')
+  );
+}
+
 /**
  * Multi-turn chat mode: interactive loop with session memory.
  */
@@ -72,6 +116,7 @@ export async function chatMode(
   const memory = createMemory();
   let currentState: AppState = AppState.LISTENING_FOR_COMMAND;
   let pendingAction: PendingAction | null = null;
+  let isInteractiveMode = false;
   
   while (true) {
     try {
@@ -126,7 +171,9 @@ export async function chatMode(
           // Clear pending action and return to listening
           pendingAction = null;
           currentState = AppState.LISTENING_FOR_COMMAND;
-          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          if (!isInteractiveMode) {
+            console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          }
           continue;
         } else if (confirmation === 'no') {
           // Cancel the action
@@ -137,7 +184,9 @@ export async function chatMode(
           // Clear pending action and return to listening
           pendingAction = null;
           currentState = AppState.LISTENING_FOR_COMMAND;
-          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          if (!isInteractiveMode) {
+            console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          }
           continue;
         } else {
           // Unclear - reprompt
@@ -150,18 +199,19 @@ export async function chatMode(
       }
 
       // LISTENING_FOR_COMMAND state
-      // Step 1: Wait for push-to-talk
-      await waitForPushToTalk();
+      // Step 1: Wait for push-to-talk (skip when live transcription is enabled)
+      const useLiveTranscription = options.live !== false; // Default to true
+      if (!isInteractiveMode && !useLiveTranscription) {
+        await waitForPushToTalk();
+      }
       
       // Step 2 & 3: Record and transcribe (with live transcription if enabled)
       let transcription: string;
       let audioPath: string | undefined;
       
-      const useLiveTranscription = options.live !== false; // Default to true
-      
       if (useLiveTranscription) {
         try {
-          console.log('🎤 Listening... (Press Enter to stop)');
+          console.log(isInteractiveMode ? '🔴 Recording... (interactive mode — speak now)' : '🎤 Listening... (Press Enter to stop)');
           const result = await streamTranscribe({
             live: true,
             silenceMs: options.silenceMs || 1000,
@@ -174,11 +224,19 @@ export async function chatMode(
           if (transcription) {
             console.log(`\n💬 Heard: "${transcription}"`);
           } else {
-            console.log('\n⚠️  No transcription received');
+            if (!isInteractiveMode) {
+              console.log('\n⚠️  No transcription received');
+            }
             continue;
           }
         } catch (error) {
           console.error('❌ Streaming transcription failed:', error instanceof Error ? error.message : error);
+          if (isInteractiveMode) {
+            isInteractiveMode = false;
+            const message = 'I had trouble transcribing. Switching back to push-to-talk.';
+            console.log(`⚠️  ${message}`);
+            await safeSpeak(message, mute, options);
+          }
           // Fall back to batch transcription
           console.log('⚠️  Falling back to batch transcription...');
           try {
@@ -190,12 +248,18 @@ export async function chatMode(
             if (fallbackError instanceof Error && fallbackError.message.includes('ELEVENLABS_API_KEY')) {
               console.log('⚠️  Continuing chat loop...');
             }
+            if (isInteractiveMode) {
+              isInteractiveMode = false;
+              const message = 'I had trouble transcribing. Switching back to push-to-talk.';
+              console.log(`⚠️  ${message}`);
+              await safeSpeak(message, mute, options);
+            }
             continue;
           }
         }
       } else {
         // Batch transcription (original behavior)
-        console.log('🔴 Recording... (up to 8 seconds)');
+        console.log(isInteractiveMode ? '🔴 Recording... (interactive mode — speak now)' : '🔴 Recording... (up to 8 seconds)');
         audioPath = await recordAudio({ durationSeconds: 8 });
         console.log('✅ Recording complete');
         
@@ -208,10 +272,30 @@ export async function chatMode(
           if (error instanceof Error && error.message.includes('ELEVENLABS_API_KEY')) {
             console.log('⚠️  Continuing chat loop...');
           }
+          if (isInteractiveMode) {
+            isInteractiveMode = false;
+            const message = 'I had trouble transcribing. Switching back to push-to-talk.';
+            console.log(`⚠️  ${message}`);
+            await safeSpeak(message, mute, options);
+          }
           continue;
         }
       }
       
+      if (detectInteractiveModeTrigger(transcription)) {
+        isInteractiveMode = true;
+        console.log('🎧 Switching to interactive mode');
+        await safeSpeak('Switching to interactive mode', mute, options);
+        continue;
+      }
+
+      if (isInteractiveMode && detectExitInteractiveMode(transcription)) {
+        isInteractiveMode = false;
+        console.log('🛑 Exiting interactive mode');
+        await safeSpeak('Exiting interactive mode', mute, options);
+        continue;
+      }
+
       // Apply response style directives (e.g., "be detailed", "short")
       const styleDirective = applyStyleDirective(transcription, memory.responseStyle);
       if (styleDirective.changed) {
@@ -304,7 +388,7 @@ export async function chatMode(
         console.log(`🔄 Dispatching intent (router): ${plan.intent}`);
         dispatchedResult = await dispatchAgentResult(mockAgentResult, memory, repoPath);
       }
-      
+
       // Step 5: Handle dispatched result
       if (dispatchedResult.type === 'info') {
         // Informational intent - print and speak response immediately
@@ -317,8 +401,10 @@ export async function chatMode(
         }
         
         // For other info intents, continue to next iteration (ask for next command)
-        console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
-        console.log(`🔄 Returning to listening state...`);
+        if (!isInteractiveMode) {
+          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          console.log(`🔄 Returning to listening state...`);
+        }
         continue;
       }
       
@@ -370,8 +456,10 @@ export async function chatMode(
       }
       
       // Step 10: Ask for next action
-      console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
-      console.log(`🔄 Returning to listening state...`);
+      if (!isInteractiveMode) {
+        console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+        console.log(`🔄 Returning to listening state...`);
+      }
       
     } catch (error) {
       console.error('❌ Error:', error);
