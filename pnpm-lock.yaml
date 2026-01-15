@@ -11,6 +11,9 @@ importers:
       commander:
         specifier: ^11.1.0
         version: 11.1.0
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
       node-record-lpcm16:
         specifier: ^1.0.1
         version: 1.0.1
@@ -222,6 +225,10 @@ packages:
       supports-color:
         optional: true
 
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
+
   esbuild@0.27.2:
     resolution: {integrity: sha512-HyNQImnsOC7X9PMNaCIeAm4ISCQXs5a5YasTXVliKv4uuBo1dKrG0A+uQS8M5eXjVMnLg3WgXaKvprHlFJQffw==}
     engines: {node: '>=18'}
@@ -381,6 +388,8 @@ snapshots:
   debug@2.6.9:
     dependencies:
       ms: 2.0.0
+
+  dotenv@16.6.1: {}
 
   esbuild@0.27.2:
     optionalDependencies:
