@@ -74,6 +74,28 @@ export class LiveTranscriptUI {
   }
 
   /**
+   * Commit a final transcript segment as a stable line.
+   */
+  commitFinal(text: string): void {
+    if (!this.isActive) {
+      return;
+    }
+
+    const finalText = text.trim();
+    if (!finalText) {
+      this.currentLine = '';
+      this.update(this.currentLine);
+      return;
+    }
+
+    readline.cursorTo(process.stdout, 0);
+    readline.clearLine(process.stdout, 0);
+    process.stdout.write(`${finalText}\n`);
+    this.currentLine = '';
+    this.update(this.currentLine);
+  }
+
+  /**
    * Finalize and return the final transcript.
    */
   finalize(): string {

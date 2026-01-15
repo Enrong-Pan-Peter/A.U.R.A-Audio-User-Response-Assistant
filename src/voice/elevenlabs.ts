@@ -3,6 +3,7 @@
  */
 
 const ELEVENLABS_API_BASE = 'https://api.elevenlabs.io/v1';
+const ELEVENLABS_WS_BASE = 'wss://api.elevenlabs.io/v1';
 
 /**
  * Gets the ElevenLabs API key from environment variables.
@@ -39,4 +40,38 @@ export async function elevenFetch(
     ...init,
     headers,
   });
+}
+
+export interface RealtimeSTTUrlOptions {
+  modelId?: string;
+  sampleRate?: number;
+  languageCode?: string;
+  audioFormat?: 'pcm_16000' | 'pcm_8000' | 'pcm_24000' | 'pcm_44100' | 'pcm_48000';
+  includeTimestamps?: boolean;
+  vadCommitStrategy?: boolean;
+}
+
+export function getRealtimeSTTWebSocketUrl(options: RealtimeSTTUrlOptions = {}): string {
+  const params = new URLSearchParams();
+  params.set('model_id', options.modelId || 'scribe_v2_realtime');
+  params.set('audio_format', options.audioFormat || 'pcm_16000');
+  params.set('sample_rate', String(options.sampleRate || 16000));
+  if (options.languageCode) {
+    params.set('language_code', options.languageCode);
+  }
+  if (typeof options.includeTimestamps === 'boolean') {
+    params.set('include_timestamps', options.includeTimestamps ? 'true' : 'false');
+  }
+  if (typeof options.vadCommitStrategy === 'boolean') {
+    params.set('vad_commit_strategy', options.vadCommitStrategy ? 'true' : 'false');
+  }
+
+  return `${ELEVENLABS_WS_BASE}/speech-to-text/realtime?${params.toString()}`;
+}
+
+export function getElevenLabsWebSocketHeaders(): Record<string, string> {
+  const apiKey = getElevenLabsApiKey();
+  return {
+    'xi-api-key': apiKey,
+  };
 }
