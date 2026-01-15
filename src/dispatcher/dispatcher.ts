@@ -3,7 +3,7 @@ import { AgentResult } from '../agent/types.js';
 import { CommandTemplate } from '../exec/runner.js';
 import { SessionMemory } from '../session/memory.js';
 import { getDetails } from '../session/memory.js';
-import { explainFailure } from '../intents/explainFailure.js';
+import { explainFailureLLM } from '../intents/explainFailureLLM.js';
 
 /**
  * Categorizes intents into informational (immediate response) vs action (requires execution).
@@ -64,22 +64,37 @@ async function handleInfoIntent(
 
   switch (intent) {
     case Intent.EXPLAIN_FAILURE:
-      // Generate real explanation from lastRun if available
+      // Generate conversational explanation from lastRun if available
       if (memory.lastRun) {
-        responseText = explainFailure(memory.lastRun);
+        responseText = await explainFailureLLM(
+          memory.lastRun.command,
+          memory.lastRun.cwd,
+          memory.lastRun.exitCode,
+          memory.lastRun.stderr,
+          memory.lastRun.stdout
+        );
+        // Enter diagnosis mode for follow-up questions
+        memory.inDiagnosisMode = true;
+        // Check if response contains a question (simple heuristic)
+        if (responseText.includes('?') || responseText.toLowerCase().includes('would you like')) {
+          memory.lastAssistantQuestion = responseText;
+        }
       } else if (memory.lastFailure) {
-        // Fallback: construct LastRun from lastFailure
-        responseText = explainFailure({
-          command: `Last ${memory.lastFailure.intent}`,
-          cwd: process.cwd(),
-          exitCode: memory.lastFailure.exitCode,
-          stdout: memory.lastFailure.stdout,
-          stderr: memory.lastFailure.stderr,
-          startedAt: Date.now() - 10000, // Estimate
-          endedAt: Date.now(),
-        });
+        // Fallback: use lastFailure data
+        responseText = await explainFailureLLM(
+          `Last ${memory.lastFailure.intent}`,
+          process.cwd(),
+          memory.lastFailure.exitCode,
+          memory.lastFailure.stderr,
+          memory.lastFailure.stdout
+        );
+        memory.inDiagnosisMode = true;
+        if (responseText.includes('?') || responseText.toLowerCase().includes('would you like')) {
+          memory.lastAssistantQuestion = responseText;
+        }
       } else {
         responseText = 'No failure recorded yet. Please run a command that fails (like "run build" or "run tests"), then ask me to explain the failure.';
+        memory.inDiagnosisMode = false;
       }
       break;
 

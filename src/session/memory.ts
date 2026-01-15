@@ -19,6 +19,8 @@ export interface SessionMemory {
     exitCode: number;
   } | null;
   lastRun: LastRun | null; // Store detailed last run info for failure analysis
+  lastAssistantQuestion?: string; // Store follow-up question from assistant for context
+  inDiagnosisMode?: boolean; // Track if we're in a diagnosis conversation
 }
 
 export function createMemory(): SessionMemory {
@@ -30,6 +32,8 @@ export function createMemory(): SessionMemory {
     lastSummary: '',
     lastFailure: null,
     lastRun: null,
+    lastAssistantQuestion: undefined,
+    inDiagnosisMode: false,
   };
 }
 

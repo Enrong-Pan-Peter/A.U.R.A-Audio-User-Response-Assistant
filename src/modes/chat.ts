@@ -137,6 +137,40 @@ export async function chatMode(
       // Step 4: Plan using AI agent or fallback router and dispatch
       let dispatchedResult: DispatchedResult;
       
+      // Check if we're in diagnosis mode and user is responding to a follow-up question
+      if (memory.inDiagnosisMode && memory.lastAssistantQuestion) {
+        // Simple heuristic: if user response is short and doesn't match a clear new intent, treat as follow-up
+        const normalized = transcription.toLowerCase().trim();
+        const isNewIntent = normalized.match(/^(run|git|create|commit|help|exit|quit|stop)/i) ||
+                           normalized.length > 50; // Long responses are likely new requests
+        
+        if (!isNewIntent) {
+          // Treat as follow-up to diagnosis question
+          console.log('💬 Continuing diagnosis conversation...');
+          
+          // For now, provide a simple response acknowledging the follow-up
+          // In a full implementation, this could use LLM to continue the conversation
+          const followUpResponse = `Thanks for that information. Based on your response, here's what I'd suggest:\n\n`;
+          const suggestion = memory.lastRun 
+            ? `Since you're dealing with: \`${memory.lastRun.command}\`\n\nTry the steps I mentioned earlier. If you'd like me to run a diagnostic command, just say "yes" or tell me which command to run.`
+            : `Review the error output and try the suggested fixes. If you need more help, describe what you've tried.`;
+          
+          console.log(`\n💬 ${followUpResponse}${suggestion}`);
+          await safeSpeak(followUpResponse + suggestion, mute, options);
+          
+          // Clear diagnosis mode after one follow-up to avoid infinite loops
+          memory.inDiagnosisMode = false;
+          memory.lastAssistantQuestion = undefined;
+          
+          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          continue;
+        } else {
+          // Clear diagnosis mode - user wants to do something new
+          memory.inDiagnosisMode = false;
+          memory.lastAssistantQuestion = undefined;
+        }
+      }
+      
       if (useAgent && process.env.OPENAI_API_KEY) {
         console.log('🤖 Using AI agent for planning...');
         const agentResult = await planAndExplain(transcription, memory);
