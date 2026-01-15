@@ -6,10 +6,11 @@ import { getCommandForIntent } from '../intents/whitelist.js';
 import { executeCommand } from '../exec/runner.js';
 import { summarize } from '../summarize/index.js';
 import { speak } from '../voice/tts.js';
-import { createMemory, updateMemory, explainFailure, getDetails } from '../session/memory.js';
+import { createMemory, updateMemory } from '../session/memory.js';
 import { Intent } from '../intents/types.js';
 import { planAndExplain } from '../agent/agent.js';
 import { existsSync } from 'fs';
+import { dispatchAgentResult, DispatchedResult } from '../dispatcher/dispatcher.js';
 
 import { PlayMode } from '../voice/tts.js';
 
@@ -133,14 +134,13 @@ export async function chatMode(
       }
       
       // Step 4: Plan using AI agent or fallback router
-      let intent: Intent;
-      let params: Record<string, string> | undefined;
-      let planDescription: string;
-      let requiresConfirmation = false;
+      // Step 4: Plan using AI agent or fallback router and dispatch
+      let dispatchedResult: DispatchedResult;
       
       if (useAgent && process.env.OPENAI_API_KEY) {
         console.log('🤖 Using AI agent for planning...');
         const agentResult = await planAndExplain(transcription, memory);
+        console.log(`📋 Agent result received: intent=${agentResult.intent}, confidence=${agentResult.confidence}`);
         
         // Handle low confidence with clarifying question
         if (agentResult.confidence < 0.6 && agentResult.clarifyingQuestion) {
@@ -150,116 +150,52 @@ export async function chatMode(
           continue;
         }
         
-        intent = agentResult.intent;
-        params = agentResult.params;
-        planDescription = agentResult.planSteps.join(' → ');
-        
-        // Map intent to confirmation requirement
-        requiresConfirmation = intent === Intent.CREATE_BRANCH || intent === Intent.MAKE_COMMIT;
-        
-        // Speak agent's explanation if available (for any intent, not just EXPLAIN_FAILURE)
-        if (agentResult.explanation) {
-          console.log(`\n💡 ${agentResult.explanation}`);
-          await safeSpeak(agentResult.explanation, mute, options);
-          
-          // For EXPLAIN_FAILURE, explanation is the full response, so continue
-          if (intent === Intent.EXPLAIN_FAILURE) {
-            continue;
-          }
-        }
-        
-        // Also speak the plan description if no explanation was provided
-        if (!agentResult.explanation && planDescription) {
-          console.log(`\n📋 Plan: ${planDescription}`);
-          await safeSpeak(`I will ${planDescription.toLowerCase()}`, mute, options);
-        } else if (planDescription) {
-          // Log plan even if explanation was spoken
-          console.log(`\n📋 Plan: ${planDescription}`);
-        }
+        // Dispatch agent result
+        console.log(`🔄 Dispatching intent: ${agentResult.intent}`);
+        dispatchedResult = await dispatchAgentResult(agentResult, memory, repoPath);
       } else {
         // Fallback to simple router
         const intentResult = routeIntent(transcription);
         const plan = createPlan(intentResult);
-        intent = plan.intent;
-        params = plan.params;
-        planDescription = plan.description;
-        requiresConfirmation = plan.requiresConfirmation;
         
-        // Speak plan description for non-agent mode
-        console.log(`\n📋 Plan: ${planDescription}`);
-        await safeSpeak(`I will ${planDescription.toLowerCase()}`, mute, options);
+        // Convert router result to agent result format for dispatcher
+        const mockAgentResult = {
+          intent: plan.intent,
+          params: plan.params,
+          planSteps: [plan.description],
+          explanation: undefined,
+          confidence: intentResult.confidence,
+        };
+        
+        console.log(`🔄 Dispatching intent (router): ${plan.intent}`);
+        dispatchedResult = await dispatchAgentResult(mockAgentResult, memory, repoPath);
       }
       
-      // Handle special intents
-      if (intent === Intent.EXIT) {
-        const goodbyeText = 'Goodbye!';
-        console.log(goodbyeText);
-        await safeSpeak(goodbyeText, mute, options);
-        break;
-      }
-      
-      if (intent === Intent.HELP) {
-        const helpText = getHelpText();
-        console.log(helpText);
-        await safeSpeak(helpText, mute, options);
-        continue;
-      }
-      
-      if (intent === Intent.REPEAT_LAST) {
-        if (memory.lastSummary) {
-          console.log(`\n📊 Repeating: ${memory.lastSummary}`);
-          await safeSpeak(memory.lastSummary, mute, options);
-        } else {
-          const noLastText = 'No previous summary to repeat.';
-          console.log(noLastText);
-          await safeSpeak(noLastText, mute, options);
+      // Step 5: Handle dispatched result
+      if (dispatchedResult.type === 'info') {
+        // Informational intent - print and speak response immediately
+        console.log(`\n💬 Response: ${dispatchedResult.responseText}`);
+        await safeSpeak(dispatchedResult.responseText, mute, options);
+        
+        // Handle EXIT intent specially
+        if (dispatchedResult.intent === Intent.EXIT) {
+          break;
         }
+        
+        // For other info intents, continue to next iteration (ask for next command)
+        console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+        console.log(`🔄 Returning to listening state...`);
         continue;
       }
       
-      if (intent === Intent.EXPLAIN_FAILURE) {
-        // If agent provided explanation, it was already handled above
-        // Otherwise use fallback explanation
-        const explanation = explainFailure(memory);
-        console.log(`\n📊 Explanation: ${explanation}`);
-        await safeSpeak(explanation, mute, options);
-        continue;
-      }
-      
-      if (intent === Intent.DETAILS) {
-        const details = getDetails(memory);
-        console.log(`\n📄 Details:\n${details}`);
-        // Summarize details for speech (first 200 chars)
-        const speechDetails = details.length > 200 ? details.substring(0, 200) + '...' : details;
-        await safeSpeak(`Details: ${speechDetails}`, mute, options);
-        continue;
-      }
-      
-      if (intent === Intent.UNKNOWN) {
-        const unknownText = `I didn't understand that. Try saying "help" for available commands.`;
-        console.log(unknownText);
-        await safeSpeak(unknownText, mute, options);
-        continue;
-      }
-      
-      // Step 5: Get command
-      const commandTemplate = await getCommandForIntent(intent, params, repoPath);
-      
-      if (!commandTemplate) {
-        let errorText: string;
-        if (intent === Intent.MAKE_COMMIT) {
-          errorText = 'Cannot commit: no staged changes. Please stage files first using git add.';
-        } else {
-          errorText = `Cannot execute ${intent}. Command not available or parameters missing.`;
-        }
-        console.log(`❌ ${errorText}`);
-        await safeSpeak(errorText, mute, options);
-        continue;
-      }
+      // Action intent - proceed with execution flow
+      console.log(`\n📋 Plan: ${dispatchedResult.plan}`);
+      await safeSpeak(`I will ${dispatchedResult.plan.toLowerCase()}`, mute, options);
       
       // Step 6: Confirm if needed
-      if (requiresConfirmation) {
+      if (dispatchedResult.requiresConfirmation) {
         console.log('\n⚠️  This action requires confirmation.');
+        console.log(`🔄 Entering confirmation state...`);
         await waitForPushToTalk();
         
         let confirmText: string;
@@ -286,18 +222,20 @@ export async function chatMode(
         if (!normalized.includes('confirm') && !normalized.includes('proceed') && !normalized.includes('yes')) {
           const cancelledText = 'Action cancelled.';
           console.log(`❌ ${cancelledText}`);
+          console.log(`🔄 Returning to listening state...`);
           await safeSpeak(cancelledText, mute, options);
           continue;
         }
+        console.log(`✅ Confirmation received, proceeding with execution...`);
       }
       
       // Step 7: Execute
-      console.log(`\n⚙️  Executing: ${commandTemplate.command} ${commandTemplate.args.join(' ')}`);
-      const result = await executeCommand(commandTemplate);
+      console.log(`\n⚙️  Executing: ${dispatchedResult.commandTemplate.command} ${dispatchedResult.commandTemplate.args.join(' ')}`);
+      const result = await executeCommand(dispatchedResult.commandTemplate);
       
       // Step 8: Update memory
-      const summary = summarize(intent, result);
-      updateMemory(memory, intent, result, summary);
+      const summary = summarize(dispatchedResult.intent, result);
+      updateMemory(memory, dispatchedResult.intent, result, summary);
       
       // Step 9: Summarize and speak
       console.log(`\n📊 Summary: ${summary}`);
@@ -315,6 +253,7 @@ export async function chatMode(
       
       // Step 10: Ask for next action
       console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+      console.log(`🔄 Returning to listening state...`);
       
     } catch (error) {
       console.error('❌ Error:', error);

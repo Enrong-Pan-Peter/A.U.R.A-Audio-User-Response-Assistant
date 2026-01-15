@@ -1,5 +1,6 @@
 import { Intent } from '../intents/types.js';
 import { ExecutionResult } from '../exec/runner.js';
+import { LastRun } from '../intents/explainFailure.js';
 
 /**
  * Session memory for chat mode.
@@ -17,6 +18,7 @@ export interface SessionMemory {
     stderr: string;
     exitCode: number;
   } | null;
+  lastRun: LastRun | null; // Store detailed last run info for failure analysis
 }
 
 export function createMemory(): SessionMemory {
@@ -27,6 +29,7 @@ export function createMemory(): SessionMemory {
     lastExitCode: 0,
     lastSummary: '',
     lastFailure: null,
+    lastRun: null,
   };
 }
 
@@ -41,6 +44,11 @@ export function updateMemory(
   memory.lastStderr = result.stderr;
   memory.lastExitCode = result.exitCode;
   memory.lastSummary = summary;
+  
+  // Always store lastRun for failure analysis
+  if (result.lastRun) {
+    memory.lastRun = result.lastRun;
+  }
   
   if (!result.success) {
     memory.lastFailure = {
