@@ -10,6 +10,7 @@ import { speak, PlayMode } from '../voice/tts.js';
 import { recordAudio, waitForPushToTalk } from '../voice/record.js';
 import { transcribe } from '../voice/transcribe.js';
 import { streamTranscribe } from '../voice/streamTranscribe.js';
+import { getConfirmation, parseConfirmation } from '../session/confirmation.js';
 
 export interface ListenOptions {
   keepAudio?: boolean;
@@ -193,38 +194,43 @@ export async function listenMode(
     
     // Step 6: Confirm if needed
     if (requiresConfirmation) {
-      console.log('\n⚠️  This action requires confirmation.');
-      await waitForPushToTalk();
+      console.log(`\n⚠️  This action requires confirmation:\n   ${planDescription}`);
+      console.log(`   Command: ${commandTemplate.command} ${commandTemplate.args.join(' ')}`);
       
-      let confirmText: string;
-      if (useLiveTranscription) {
-        console.log('🎤 Listening for confirmation... (Press Enter to stop)');
-        const result = await streamTranscribe({
-          live: true,
-          silenceMs: options.silenceMs || 1000,
-        });
-        confirmText = result.transcript;
-        if (confirmText) {
-          console.log(`💬 Confirmation: "${confirmText}"`);
-        } else {
-          confirmText = '';
-        }
-      } else {
-        console.log('🔴 Recording confirmation...');
-        const confirmAudioPath = await recordAudio({ durationSeconds: 5 });
-        confirmText = await transcribe(confirmAudioPath);
-        console.log(`💬 Confirmation: "${confirmText}"`);
-      }
-      
-      const normalized = confirmText.toLowerCase();
-      if (!normalized.includes('confirm') && !normalized.includes('proceed') && !normalized.includes('yes')) {
-        const cancelledText = 'Action cancelled.';
-        console.log(`❌ ${cancelledText}`);
+      // Get confirmation (voice or typed)
+      const useLiveTranscription = options.live !== false;
+      let confirmation = await getConfirmation({
+        useVoice: true,
+        useLiveTranscription,
+        silenceMs: options.silenceMs || 2000,
+      });
+
+      // If unclear, reprompt once
+      if (confirmation === 'unclear') {
+        const unclearText = "I didn't understand. Please say 'yes' to proceed or 'no' to cancel.";
+        console.log(`\n❓ ${unclearText}`);
         if (!mute) {
-          await speak(cancelledText, { play: !mute, keepAudio: options.keepAudio, player: options.player });
+          await speak(unclearText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
+        }
+        
+        // Try once more
+        confirmation = await getConfirmation({
+          useVoice: true,
+          useLiveTranscription,
+          silenceMs: options.silenceMs || 2000,
+        });
+      }
+
+      if (confirmation === 'no' || confirmation === 'unclear') {
+        const cancelledText = 'Action cancelled.';
+        console.log(`\n❌ ${cancelledText}`);
+        if (!mute) {
+          await speak(cancelledText, { play: !mute, playMode: options.playMode || 'stream', keepAudio: options.keepAudio, player: options.player });
         }
         return;
       }
+      
+      // confirmation === 'yes', proceed with execution
     }
     
     // Step 7: Execute

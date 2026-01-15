@@ -1,16 +1,17 @@
-import { waitForPushToTalk, recordAudio } from '../voice/record.js';
-import { transcribe } from '../voice/transcribe.js';
-import { streamTranscribe, StreamTranscribeOptions } from '../voice/streamTranscribe.js';
-import { routeIntent, createPlan } from '../intents/router.js';
-import { getCommandForIntent } from '../intents/whitelist.js';
-import { executeCommand } from '../exec/runner.js';
-import { summarize } from '../summarize/index.js';
-import { speak } from '../voice/tts.js';
-import { createMemory, updateMemory } from '../session/memory.js';
-import { Intent } from '../intents/types.js';
-import { planAndExplain } from '../agent/agent.js';
 import { existsSync } from 'fs';
+import { planAndExplain } from '../agent/agent.js';
 import { dispatchAgentResult, DispatchedResult } from '../dispatcher/dispatcher.js';
+import { executeCommand } from '../exec/runner.js';
+import { createPlan, routeIntent } from '../intents/router.js';
+import { Intent } from '../intents/types.js';
+import { getConfirmation } from '../session/confirmation.js';
+import { createMemory, updateMemory } from '../session/memory.js';
+import { AppState, PendingAction } from '../session/state.js';
+import { summarize } from '../summarize/index.js';
+import { recordAudio, waitForPushToTalk } from '../voice/record.js';
+import { streamTranscribe } from '../voice/streamTranscribe.js';
+import { transcribe } from '../voice/transcribe.js';
+import { speak } from '../voice/tts.js';
 
 import { PlayMode } from '../voice/tts.js';
 
@@ -68,9 +69,86 @@ export async function chatMode(
   }
   
   const memory = createMemory();
+  let currentState: AppState = AppState.LISTENING_FOR_COMMAND;
+  let pendingAction: PendingAction | null = null;
   
   while (true) {
     try {
+      // State machine: handle different states
+      if (currentState === AppState.AWAITING_CONFIRMATION) {
+        // Handle confirmation state
+        if (!pendingAction) {
+          // Should not happen, but reset if it does
+          currentState = AppState.LISTENING_FOR_COMMAND;
+          continue;
+        }
+
+        // Get confirmation (voice or typed)
+        // Note: The action details were already shown when entering this state
+        const useLiveTranscription = options.live !== false;
+        const confirmation = await getConfirmation({
+          useVoice: true,
+          useLiveTranscription,
+          silenceMs: options.silenceMs || 2000,
+        });
+
+        if (confirmation === 'yes') {
+          // Execute the pending action
+          console.log(`\n⚙️  Executing: ${pendingAction.commandTemplate.command} ${pendingAction.commandTemplate.args.join(' ')}`);
+          
+          try {
+            const result = await executeCommand(pendingAction.commandTemplate);
+            
+            // Update memory
+            const summary = summarize(pendingAction.intent, result);
+            updateMemory(memory, pendingAction.intent, result, summary);
+            
+            // Summarize and speak
+            console.log(`\n📊 Summary: ${summary}`);
+            await safeSpeak(summary, mute, options);
+            
+            // Show full output if verbose
+            if (result.stdout) {
+              console.log('\n📄 Output:');
+              console.log(result.stdout);
+            }
+            if (result.stderr) {
+              console.log('\n⚠️  Errors:');
+              console.log(result.stderr);
+            }
+          } catch (error) {
+            console.error('❌ Execution failed:', error);
+            const errorText = `Execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`;
+            await safeSpeak(errorText, mute, options);
+          }
+          
+          // Clear pending action and return to listening
+          pendingAction = null;
+          currentState = AppState.LISTENING_FOR_COMMAND;
+          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          continue;
+        } else if (confirmation === 'no') {
+          // Cancel the action
+          const cancelledText = 'Action cancelled.';
+          console.log(`\n❌ ${cancelledText}`);
+          await safeSpeak(cancelledText, mute, options);
+          
+          // Clear pending action and return to listening
+          pendingAction = null;
+          currentState = AppState.LISTENING_FOR_COMMAND;
+          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
+          continue;
+        } else {
+          // Unclear - reprompt
+          const unclearText = "I didn't understand. Please say 'yes' to proceed or 'no' to cancel.";
+          console.log(`\n❓ ${unclearText}`);
+          await safeSpeak(unclearText, mute, options);
+          // Stay in AWAITING_CONFIRMATION state
+          continue;
+        }
+      }
+
+      // LISTENING_FOR_COMMAND state
       // Step 1: Wait for push-to-talk
       await waitForPushToTalk();
       
@@ -232,44 +310,28 @@ export async function chatMode(
       console.log(`\n📋 Plan: ${dispatchedResult.plan}`);
       await safeSpeak(`I will ${dispatchedResult.plan.toLowerCase()}`, mute, options);
       
-      // Step 6: Confirm if needed
+      // Step 6: Handle confirmation requirement
       if (dispatchedResult.requiresConfirmation) {
-        console.log('\n⚠️  This action requires confirmation.');
-        console.log(`🔄 Entering confirmation state...`);
-        await waitForPushToTalk();
+        // Store pending action and switch to confirmation state
+        pendingAction = {
+          intent: dispatchedResult.intent,
+          description: dispatchedResult.plan,
+          commandTemplate: dispatchedResult.commandTemplate,
+          params: dispatchedResult.params,
+        };
         
-        let confirmText: string;
-        if (useLiveTranscription) {
-          console.log('🎤 Listening for confirmation... (Press Enter to stop)');
-          const result = await streamTranscribe({
-            live: true,
-            silenceMs: options.silenceMs || 1000,
-          });
-          confirmText = result.transcript;
-          if (confirmText) {
-            console.log(`💬 Confirmation: "${confirmText}"`);
-          } else {
-            confirmText = '';
-          }
-        } else {
-          console.log('🔴 Recording confirmation...');
-          const confirmAudioPath = await recordAudio({ durationSeconds: 5 });
-          confirmText = await transcribe(confirmAudioPath);
-          console.log(`💬 Confirmation: "${confirmText}"`);
-        }
+        currentState = AppState.AWAITING_CONFIRMATION;
         
-        const normalized = confirmText.toLowerCase();
-        if (!normalized.includes('confirm') && !normalized.includes('proceed') && !normalized.includes('yes')) {
-          const cancelledText = 'Action cancelled.';
-          console.log(`❌ ${cancelledText}`);
-          console.log(`🔄 Returning to listening state...`);
-          await safeSpeak(cancelledText, mute, options);
-          continue;
-        }
-        console.log(`✅ Confirmation received, proceeding with execution...`);
+        // Show what will be executed
+        const confirmationPrompt = `\n⚠️  This action requires confirmation:\n   ${dispatchedResult.plan}\n   Say "yes" to proceed or "no" to cancel.`;
+        console.log(confirmationPrompt);
+        await safeSpeak(`This action requires confirmation. ${dispatchedResult.plan}. Say yes to proceed or no to cancel.`, mute, options);
+        
+        // Continue loop - next iteration will handle AWAITING_CONFIRMATION state
+        continue;
       }
       
-      // Step 7: Execute
+      // Step 7: Execute (no confirmation needed)
       console.log(`\n⚙️  Executing: ${dispatchedResult.commandTemplate.command} ${dispatchedResult.commandTemplate.args.join(' ')}`);
       const result = await executeCommand(dispatchedResult.commandTemplate);
       
