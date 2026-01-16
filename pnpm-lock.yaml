@@ -30,6 +30,9 @@ importers:
       '@types/wav':
         specifier: ^1.0.2
         version: 1.0.4
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
       tsx:
         specifier: ^4.7.0
         version: 4.21.0
@@ -200,6 +203,9 @@ packages:
 
   '@types/wav@1.0.4':
     resolution: {integrity: sha512-s8C6tD2lPnkNkX2rWl0FMSpOXrKb3zB9eRO36p2bViSVw9lVJLSJRK7sOe7lOQ13YpM22/K91o/stMempoWPFw==}
+
+  '@types/ws@8.18.1':
+    resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
   buffer-alloc-unsafe@1.1.0:
     resolution: {integrity: sha512-TEM2iMIEQdJ2yjPJoSIsldnleVaAk1oW3DBVUykyOLsEsFmEc9kn+SFFPz+gl54KQNxlDnAwCXosOS9Okx2xAg==}
@@ -382,6 +388,10 @@ snapshots:
       undici-types: 6.21.0
 
   '@types/wav@1.0.4':
+    dependencies:
+      '@types/node': 20.19.28
+
+  '@types/ws@8.18.1':
     dependencies:
       '@types/node': 20.19.28
 

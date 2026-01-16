@@ -53,6 +53,12 @@ export ELEVENLABS_API_KEY="your-api-key-here"
 
 # Optional: Custom voice ID (default: Rachel)
 export ELEVENLABS_VOICE_ID="your-voice-id"
+
+# Optional: Realtime STT model id (defaults to scribe_v2_realtime)
+export ELEVENLABS_STT_MODEL="scribe_v2_realtime"
+
+# Optional: TTS model id (defaults to eleven_flash_v2_5)
+export ELEVENLABS_TTS_MODEL="eleven_flash_v2_5"
 ```
 
 4. Build the project:
@@ -84,6 +90,8 @@ pnpm dev listen --play-mode=stream  # Stream to ffplay (requires FFmpeg, no file
 pnpm dev listen --keep-audio  # Keep audio files after playback (file mode only)
 # or
 pnpm dev listen --player "custom-player-command"  # Use custom player (file mode only)
+# or
+pnpm dev listen --stt-model scribe_v2_realtime  # Override realtime STT model
 ```
 
 **Example flow:**
@@ -113,7 +121,13 @@ pnpm dev chat --play-mode=file  # Save to file and play (fallback if ffplay not 
 pnpm dev chat --keep-audio  # Keep audio files after playback (file mode only)
 # or
 pnpm dev chat --player "custom-player-command"  # Use custom player (file mode only)
+# or
+pnpm dev chat --stt-model scribe_v2_realtime  # Override realtime STT model
 ```
+
+### Realtime STT Model Selection
+
+Set `ELEVENLABS_STT_MODEL` to change the default realtime model, or use `--stt-model` to override it per run. The CLI flag takes precedence over the env var.
 
 **Example flow:**
 1. Press Enter to start recording

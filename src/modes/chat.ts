@@ -22,6 +22,7 @@ export interface ChatOptions {
   playMode?: PlayMode;
   live?: boolean; // Enable live transcription (default: true)
   silenceMs?: number; // Silence timeout in milliseconds (default: 1000)
+  sttModel?: string; // Realtime STT model id
 }
 
 /**
@@ -216,6 +217,7 @@ export async function chatMode(
             live: true,
             silenceMs: options.silenceMs || 1000,
             onManualStop: () => false, // Manual stop handled internally
+            modelId: options.sttModel,
           });
           
           transcription = result.transcript;

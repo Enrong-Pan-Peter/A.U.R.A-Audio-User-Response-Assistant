@@ -8,6 +8,7 @@ import { streamPlayAudio } from '../audio/streamPlay.js';
 import { elevenFetch, getElevenLabsApiKey } from './elevenlabs.js';
 
 const DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel
+const DEFAULT_TTS_MODEL = 'eleven_flash_v2_5';
 
 export type PlayMode = 'stream' | 'file';
 
@@ -60,7 +61,7 @@ export async function speak(
       },
       body: JSON.stringify({
         text,
-        model_id: 'eleven_monolingual_v1',
+        model_id: process.env.ELEVENLABS_TTS_MODEL || DEFAULT_TTS_MODEL,
         voice_settings: {
           stability: 0.5,
           similarity_boost: 0.75,

@@ -9,6 +9,7 @@ export interface RealtimeScribeOptions {
   languageCode?: string;
   debug?: boolean;
   vadCommitStrategy?: boolean;
+  modelId?: string;
 }
 
 type PartialHandler = (text: string) => void;
@@ -41,6 +42,7 @@ export class RealtimeScribeClient {
       languageCode: this.options.languageCode,
       vadCommitStrategy: this.options.vadCommitStrategy,
       audioFormat: 'pcm_16000',
+      modelId: this.options.modelId,
     });
     const headers = getElevenLabsWebSocketHeaders();
 
@@ -49,8 +51,8 @@ export class RealtimeScribeClient {
       this.ws = ws;
 
       ws.on('open', () => resolve());
-      ws.on('error', (err) => reject(err));
-      ws.on('message', (data) => this.handleMessage(data));
+      ws.on('error', (err: Error) => reject(err));
+      ws.on('message', (data: WebSocket.RawData) => this.handleMessage(data));
       ws.on('close', () => {
         this.ws = null;
       });

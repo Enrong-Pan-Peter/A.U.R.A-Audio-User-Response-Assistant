@@ -8,6 +8,7 @@ export class LiveTranscriptUI {
   private currentLine: string = '';
   private prefix: string;
   private isActive = false;
+  private isClosed = false;
 
   constructor(prefix: string = '💬 Listening... ') {
     this.prefix = prefix;
@@ -106,6 +107,7 @@ export class LiveTranscriptUI {
     // Move to new line
     process.stdout.write('\n');
     this.isActive = false;
+    this.close();
 
     return this.currentLine.trim();
   }
@@ -124,6 +126,19 @@ export class LiveTranscriptUI {
     process.stdout.write('\n');
     
     this.isActive = false;
+    this.close();
+  }
+
+  /**
+   * Close the readline interface to release listeners.
+   */
+  close(): void {
+    if (this.isClosed) {
+      return;
+    }
+
+    this.isClosed = true;
+    this.rl.close();
   }
 
   /**

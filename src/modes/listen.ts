@@ -19,6 +19,7 @@ export interface ListenOptions {
   playMode?: PlayMode;
   live?: boolean; // Enable live transcription (default: true)
   silenceMs?: number; // Silence timeout in milliseconds (default: 1000)
+  sttModel?: string; // Realtime STT model id
 }
 
 /**
@@ -57,6 +58,7 @@ export async function listenMode(
         const result = await streamTranscribe({
           live: true,
           silenceMs: options.silenceMs || 1000,
+          modelId: options.sttModel,
         });
         
         transcription = result.transcript;

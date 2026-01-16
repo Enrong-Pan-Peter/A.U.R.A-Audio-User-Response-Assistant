@@ -36,7 +36,7 @@ export async function transcribeAudio(wavPath: string): Promise<string> {
     const formData = new FormData();
     const blob = new Blob([audioBuffer], { type: 'audio/wav' });
     formData.append('file', blob, 'audio.wav');
-    formData.append('model_id', 'scribe_v1');
+    formData.append('model_id', 'scribe_v2');
     formData.append('language_code', 'en');
     formData.append('webhook', 'false');
 

@@ -1,3 +1,7 @@
+import { randomUUID } from 'crypto';
+import { mkdir, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { PartialTranscript, StreamingSTTClient } from '../stt/streamingClient.js';
 import { LiveTranscriptUI } from '../ui/liveTranscript.js';
 import { AudioChunk, StreamRecorder } from './streamRecord.js';
@@ -12,6 +16,8 @@ export interface StreamTranscribeOptions {
   sampleRate?: number;
   /** Chunk size in milliseconds (default: 40) */
   chunkSizeMs?: number;
+  /** Realtime STT model id */
+  modelId?: string;
   /** Manual stop callback - return true to stop */
   onManualStop?: () => boolean;
 }
@@ -20,6 +26,35 @@ export interface StreamTranscribeResult {
   transcript: string;
   audioPath?: string; // Path to saved audio file (if saved)
   duration: number;
+}
+
+function buildWavBuffer(
+  pcmData: Buffer,
+  sampleRate: number,
+  channels: number = 1,
+  bitsPerSample: number = 16
+): Buffer {
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+  const dataSize = pcmData.length;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write('WAVE', 8);
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+
+  pcmData.copy(buffer, 44);
+  return buffer;
 }
 
 /**
@@ -38,11 +73,13 @@ export async function streamTranscribe(
     silenceMs = 1000,
     sampleRate = 16000,
     chunkSizeMs = 40,
+    modelId,
     onManualStop,
   } = options;
 
   const startTime = Date.now();
   let audioPath: string | undefined;
+  const pcmChunks: Buffer[] = [];
 
   // Initialize components
   const recorder = new StreamRecorder({
@@ -52,12 +89,14 @@ export async function streamTranscribe(
 
   const sttClient = new StreamingSTTClient({
     sampleRate,
+    modelId,
   });
 
   const ui = new LiveTranscriptUI('💬 ');
 
   let finalTranscript = '';
   let manualStop = false;
+  let cleanupInput: (() => void) | null = null;
 
   return new Promise<StreamTranscribeResult>((resolve, reject) => {
     // Setup manual stop handler
@@ -74,9 +113,9 @@ export async function streamTranscribe(
           if (key === '\r' || key === '\n' || key === 'q') {
             manualStop = true;
             recorder.stop();
-            stdin.removeListener('data', stopHandler);
-            stdin.setRawMode(false);
-            stdin.pause();
+            if (cleanupInput) {
+              cleanupInput();
+            }
           }
         };
 
@@ -91,8 +130,18 @@ export async function streamTranscribe(
           }
         };
 
-        process.once('SIGINT', cleanup);
-        process.once('SIGTERM', cleanup);
+        const sigintHandler = () => cleanup();
+        const sigtermHandler = () => cleanup();
+
+        process.on('SIGINT', sigintHandler);
+        process.on('SIGTERM', sigtermHandler);
+
+        cleanupInput = () => {
+          cleanup();
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigtermHandler);
+          cleanupInput = null;
+        };
       }
     }
 
@@ -105,6 +154,38 @@ export async function streamTranscribe(
         ui.replace(partial.text);
       }
     });
+
+    const finalizeAudioPath = async (): Promise<string | undefined> => {
+      if (audioPath || pcmChunks.length === 0) {
+        return audioPath;
+      }
+
+      const wavBuffer = buildWavBuffer(Buffer.concat(pcmChunks), sampleRate);
+      const tmpDir = join(tmpdir(), 'devvoice');
+      await mkdir(tmpDir, { recursive: true });
+      audioPath = join(tmpDir, `devvoice-stream-${randomUUID()}.wav`);
+      await writeFile(audioPath, wavBuffer);
+      return audioPath;
+    };
+
+    const tryCleanupTranscript = async (): Promise<void> => {
+      const path = await finalizeAudioPath();
+      if (!path) {
+        return;
+      }
+
+      try {
+        const cleanupTranscript = await transcribe(path);
+        if (cleanupTranscript) {
+          finalTranscript = cleanupTranscript;
+        }
+      } catch (error) {
+        console.warn(
+          '⚠️  Batch cleanup transcription failed, keeping realtime transcript:',
+          error instanceof Error ? error.message : error
+        );
+      }
+    };
 
     // Handle final transcript
     sttClient.on('final', async (partial: PartialTranscript) => {
@@ -124,8 +205,10 @@ export async function streamTranscribe(
 
       const duration = Date.now() - startTime;
 
-      // Optionally save audio file (for debugging or fallback)
-      // For now, we won't save by default to keep it streaming-focused
+      await tryCleanupTranscript();
+      if (cleanupInput) {
+        cleanupInput();
+      }
 
       resolve({
         transcript: finalTranscript,
@@ -140,6 +223,9 @@ export async function streamTranscribe(
       sttClient.close();
       if (live) {
         ui.stop();
+      }
+      if (cleanupInput) {
+        cleanupInput();
       }
 
       // Fallback to batch transcription
@@ -178,6 +264,7 @@ export async function streamTranscribe(
       // Send audio chunks to STT client
       recorder.on('chunk', (chunk: AudioChunk) => {
         if (!manualStop && recorder.recording) {
+          pcmChunks.push(chunk.data);
           sttClient.sendAudioChunk(chunk.data);
         }
       });
@@ -197,6 +284,10 @@ export async function streamTranscribe(
             sttClient.close();
 
             const duration = Date.now() - startTime;
+            await tryCleanupTranscript();
+            if (cleanupInput) {
+              cleanupInput();
+            }
             resolve({
               transcript: finalTranscript,
               audioPath,
@@ -210,6 +301,9 @@ export async function streamTranscribe(
             sttClient.close();
 
             const duration = Date.now() - startTime;
+            if (cleanupInput) {
+              cleanupInput();
+            }
             resolve({
               transcript: finalTranscript || ui.text,
               audioPath,
