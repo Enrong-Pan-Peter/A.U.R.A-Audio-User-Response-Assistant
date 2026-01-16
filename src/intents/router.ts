@@ -172,6 +172,10 @@ export function createPlan(intentResult: IntentResult): CommandPlan {
       description: 'Show help',
       requiresConfirmation: false,
     },
+    [Intent.INTERACTIVE_MODE]: {
+      description: 'Enable interactive mode',
+      requiresConfirmation: false,
+    },
     [Intent.EXIT]: {
       description: 'Exit',
       requiresConfirmation: false,

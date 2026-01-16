@@ -21,7 +21,7 @@ export interface ChatOptions {
   player?: string;
   playMode?: PlayMode;
   live?: boolean; // Enable live transcription (default: true)
-  silenceMs?: number; // Silence timeout in milliseconds (default: 1000)
+  silenceMs?: number; // Silence timeout in milliseconds (default: 3000)
   sttModel?: string; // Realtime STT model id
 }
 
@@ -59,39 +59,50 @@ function normalizeTranscript(text: string): string {
     .trim();
 }
 
+/**
+ * Fallback keyword-based detection for interactive mode (used when agent is unavailable).
+ * This is a simple fallback - when agent is available, use intent-based detection instead.
+ */
 function detectInteractiveModeTrigger(text: string): boolean {
   const normalized = normalizeTranscript(text);
-  const triggerPhrase = 'i need you to talk interactively to me';
-  if (normalized.includes(triggerPhrase)) {
-    return true;
-  }
-
-  if (!normalized.includes('interactive')) {
-    return false;
-  }
-
-  const triggerTokens = new Set(triggerPhrase.split(' '));
-  const inputTokens = new Set(normalized.split(' '));
-  let matches = 0;
-  triggerTokens.forEach((token) => {
-    if (inputTokens.has(token)) {
-      matches += 1;
-    }
-  });
-
-  return matches >= 6;
+  // Vague patterns that might indicate wanting interactive mode
+  const patterns = [
+    'interactive',
+    'talk with me',
+    'conversation mode',
+    'talk to me',
+    'chat mode',
+  ];
+  
+  // Check if text contains any interactive-related keywords
+  const hasInteractiveKeyword = patterns.some(pattern => normalized.includes(pattern));
+  
+  // Also check for intent-like phrases
+  const intentPhrases = [
+    'want you to talk',
+    'want to talk',
+    'need you to talk',
+    'let\'s talk',
+    'can we talk',
+  ];
+  
+  const hasIntentPhrase = intentPhrases.some(phrase => normalized.includes(phrase));
+  
+  return hasInteractiveKeyword || hasIntentPhrase;
 }
 
 function detectExitInteractiveMode(text: string, intent?: Intent): boolean {
-  if (intent === Intent.EXIT) {
-    return false; // "exit" should quit via normal intent handling
-  }
-
   const normalized = normalizeTranscript(text);
+  
+  // Only exit interactive mode when user explicitly says "bye" or similar farewell
+  // Don't exit if they say "bye interactive mode" (that's the old behavior we're replacing)
+  const hasBye = normalized.includes('bye') && !normalized.includes('bye interactive') && !normalized.includes('exit interactive');
+  
   return (
-    normalized.includes('exit interactive mode') ||
-    normalized.includes('stop interactive mode') ||
-    normalized.includes('exit interactive')
+    hasBye ||
+    normalized.includes('goodbye') ||
+    normalized.includes('see you') ||
+    normalized.includes('farewell')
   );
 }
 
@@ -159,7 +170,8 @@ export async function chatMode(
               console.log('\n📄 Output:');
               console.log(result.stdout);
             }
-            if (result.stderr) {
+            // Only show stderr as errors if the command actually failed (exit code non-zero)
+            if (result.stderr && result.exitCode !== 0) {
               console.log('\n⚠️  Errors:');
               console.log(result.stderr);
             }
@@ -173,7 +185,6 @@ export async function chatMode(
           pendingAction = null;
           currentState = AppState.LISTENING_FOR_COMMAND;
           if (!isInteractiveMode) {
-            console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
           }
           continue;
         } else if (confirmation === 'no') {
@@ -186,7 +197,6 @@ export async function chatMode(
           pendingAction = null;
           currentState = AppState.LISTENING_FOR_COMMAND;
           if (!isInteractiveMode) {
-            console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
           }
           continue;
         } else {
@@ -212,11 +222,11 @@ export async function chatMode(
       
       if (useLiveTranscription) {
         try {
-          console.log(isInteractiveMode ? '🔴 Recording... (interactive mode — speak now)' : '🎤 Listening... (Press Enter to stop)');
+          console.log(isInteractiveMode ? '🔴 Recording... (interactive mode — speak now)' : '🎤 Listening...');
           const result = await streamTranscribe({
             live: true,
-            silenceMs: options.silenceMs || 1000,
-            onManualStop: () => false, // Manual stop handled internally
+            silenceMs: options.silenceMs || 3000, // 3 seconds of no speech
+            // No onManualStop - rely on automatic silence detection
             modelId: options.sttModel,
           });
           
@@ -284,18 +294,12 @@ export async function chatMode(
         }
       }
       
-      if (detectInteractiveModeTrigger(transcription)) {
-        isInteractiveMode = true;
-        console.log('🎧 Switching to interactive mode');
-        await safeSpeak('Switching to interactive mode', mute, options);
-        continue;
-      }
-
+      // Check for exit interactive mode first (before other intent processing)
+      // "bye" in interactive mode should exit the entire program, not just interactive mode
       if (isInteractiveMode && detectExitInteractiveMode(transcription)) {
-        isInteractiveMode = false;
-        console.log('🛑 Exiting interactive mode');
-        await safeSpeak('Exiting interactive mode', mute, options);
-        continue;
+        console.log('🛑 Exiting');
+        await safeSpeak('Goodbye!', mute, options);
+        break; // Exit the entire program
       }
 
       // Apply response style directives (e.g., "be detailed", "short")
@@ -342,7 +346,6 @@ export async function chatMode(
           memory.inDiagnosisMode = false;
           memory.lastAssistantQuestion = undefined;
           
-          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
           continue;
         } else {
           // Clear diagnosis mode - user wants to do something new
@@ -354,7 +357,15 @@ export async function chatMode(
       if (useAgent && process.env.OPENAI_API_KEY) {
         console.log('🤖 Using AI agent for planning...');
         const agentResult = await planAndExplain(transcription, memory);
-        console.log(`📋 Agent result received: intent=${agentResult.intent}, confidence=${agentResult.confidence}`);
+        console.log(`📋 Agent result: confidence=${agentResult.confidence}`);
+        
+        // Handle INTERACTIVE_MODE intent using OpenAI interpretation
+        if (agentResult.intent === Intent.INTERACTIVE_MODE) {
+          isInteractiveMode = true;
+          console.log('🎧 Switching to interactive mode');
+          await safeSpeak(agentResult.explanation || 'Switching to interactive mode', mute, options);
+          continue;
+        }
         
         // Handle low confidence with clarifying question
         if (agentResult.confidence < 0.6 && agentResult.clarifyingQuestion) {
@@ -365,12 +376,19 @@ export async function chatMode(
         }
         
         // Dispatch agent result
-        console.log(`🔄 Dispatching intent: ${agentResult.intent}`);
         dispatchedResult = await dispatchAgentResult(agentResult, memory, repoPath);
       } else {
         // Fallback to simple router
         const intentResult = routeIntent(transcription);
         const plan = createPlan(intentResult);
+        
+        // Fallback: keyword-based detection for interactive mode (when agent is unavailable)
+        if (detectInteractiveModeTrigger(transcription)) {
+          isInteractiveMode = true;
+          console.log('🎧 Switching to interactive mode');
+          await safeSpeak('Switching to interactive mode', mute, options);
+          continue;
+        }
         
         // Convert router result to agent result format for dispatcher
         // For CODEBASE_QA, extract query from transcription
@@ -387,24 +405,44 @@ export async function chatMode(
           confidence: intentResult.confidence,
         };
         
-        console.log(`🔄 Dispatching intent (router): ${plan.intent}`);
         dispatchedResult = await dispatchAgentResult(mockAgentResult, memory, repoPath);
       }
 
       // Step 5: Handle dispatched result
       if (dispatchedResult.type === 'info') {
+        // Handle INTERACTIVE_MODE intent from dispatcher (as a fallback/safety check)
+        if (dispatchedResult.intent === Intent.INTERACTIVE_MODE) {
+          isInteractiveMode = true;
+          console.log('🎧 Switching to interactive mode');
+          await safeSpeak(dispatchedResult.responseText, mute, options);
+          continue;
+        }
+        
         // Informational intent - print and speak response immediately
         console.log(`\n💬 Response: ${dispatchedResult.responseText}`);
         await safeSpeak(dispatchedResult.responseText, mute, options);
         
         // Handle EXIT intent specially
-        if (dispatchedResult.intent === Intent.EXIT) {
-          break;
+        // Check if shouldExit flag is set (from custom responses like "Thank you, bye")
+        if (dispatchedResult.shouldExit || dispatchedResult.intent === Intent.EXIT) {
+          // If shouldExit is true, always exit the entire program (even in interactive mode)
+          if (dispatchedResult.shouldExit) {
+            break;
+          }
+          // Otherwise, handle normal EXIT intent
+          if (isInteractiveMode) {
+            isInteractiveMode = false;
+            console.log('🛑 Exiting interactive mode');
+            await safeSpeak('Exiting interactive mode', mute, options);
+            continue;
+          } else {
+            // In non-interactive mode, EXIT quits the chat entirely
+            break;
+          }
         }
         
         // For other info intents, continue to next iteration (ask for next command)
         if (!isInteractiveMode) {
-          console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
           console.log(`🔄 Returning to listening state...`);
         }
         continue;
@@ -447,19 +485,19 @@ export async function chatMode(
       console.log(`\n📊 Summary: ${summary}`);
       await safeSpeak(summary, mute, options);
       
-      // Show full output if verbose
-      if (result.stdout) {
-        console.log('\n📄 Output:');
-        console.log(result.stdout);
-      }
-      if (result.stderr) {
-        console.log('\n⚠️  Errors:');
-        console.log(result.stderr);
-      }
+            // Show full output if verbose
+            if (result.stdout) {
+              console.log('\n📄 Output:');
+              console.log(result.stdout);
+            }
+            // Only show stderr as errors if the command actually failed (exit code non-zero)
+            if (result.stderr && result.exitCode !== 0) {
+              console.log('\n⚠️  Errors:');
+              console.log(result.stderr);
+            }
       
       // Step 10: Ask for next action
       if (!isInteractiveMode) {
-        console.log('\n💬 Anything else? (Press Enter to continue, or say "exit" to quit)');
         console.log(`🔄 Returning to listening state...`);
       }
       

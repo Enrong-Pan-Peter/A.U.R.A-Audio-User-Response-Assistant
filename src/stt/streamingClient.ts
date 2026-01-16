@@ -26,9 +26,11 @@ export class StreamingSTTClient extends EventEmitter {
   private isConnected = false;
   private audioBuffer: Buffer[] = [];
   private lastChunkTime: number = 0;
+  private lastSpeechTime: number = 0; // Track when speech was last detected
   private silenceTimeout: NodeJS.Timeout | null = null;
   private partialTimeout: NodeJS.Timeout | null = null;
-  private minSilenceMs: number = 1000; // 1 second of silence before finalizing
+  private minSilenceMs: number = 3000; // 3 seconds of silence before finalizing
+  private speechEnergyThreshold: number = 800; // RMS energy threshold for speech detection (increased to filter noise)
 
   constructor(options: StreamingSTTOptions = {}) {
     super();
@@ -56,12 +58,52 @@ export class StreamingSTTClient extends EventEmitter {
     this.isConnected = true;
     this.audioBuffer = [];
     this.lastChunkTime = Date.now();
+    this.lastSpeechTime = Date.now(); // Initialize to current time
     this.emit('connected');
+  }
+
+  /**
+   * Calculate RMS (Root Mean Square) energy of audio chunk to detect speech.
+   * Returns energy level - higher values indicate louder audio (likely speech).
+   * 
+   * @param chunk - PCM16 audio chunk (16-bit signed integers)
+   * @returns RMS energy value
+   */
+  private calculateChunkEnergy(chunk: Buffer): number {
+    if (chunk.length < 2) {
+      return 0;
+    }
+
+    // PCM16: 2 bytes per sample, signed 16-bit integers
+    let sumSquares = 0;
+    const sampleCount = Math.floor(chunk.length / 2);
+
+    for (let i = 0; i < chunk.length - 1; i += 2) {
+      // Read 16-bit signed integer (little-endian)
+      const sample = chunk.readInt16LE(i);
+      sumSquares += sample * sample;
+    }
+
+    // Calculate RMS: sqrt(average of squares)
+    const rms = Math.sqrt(sumSquares / sampleCount);
+    return rms;
+  }
+
+  /**
+   * Detect if audio chunk contains speech based on energy level.
+   * 
+   * @param chunk - PCM16 audio chunk
+   * @returns true if chunk likely contains speech
+   */
+  private isSpeech(chunk: Buffer): boolean {
+    const energy = this.calculateChunkEnergy(chunk);
+    return energy > this.speechEnergyThreshold;
   }
 
   /**
    * Send audio chunk for transcription.
    * Accumulates chunks and processes them periodically.
+   * Only resets silence timer if chunk contains actual speech.
    */
   sendAudioChunk(chunk: Buffer): void {
     if (!this.isConnected) {
@@ -71,10 +113,10 @@ export class StreamingSTTClient extends EventEmitter {
     this.audioBuffer.push(chunk);
     this.lastChunkTime = Date.now();
 
-    // Clear existing silence timeout and restart it
-    if (this.silenceTimeout) {
-      clearTimeout(this.silenceTimeout);
-      this.silenceTimeout = null;
+    // Only reset silence timer if this chunk contains speech (not just noise)
+    const hasSpeech = this.isSpeech(chunk);
+    if (hasSpeech) {
+      this.lastSpeechTime = Date.now();
     }
 
     // Clear partial processing timeout if it exists
@@ -90,13 +132,18 @@ export class StreamingSTTClient extends EventEmitter {
       }
     }, 500);
 
-    // Reset silence detection timer
-    this.checkSilence();
+    // Reset silence detection timer only if speech was detected
+    if (hasSpeech) {
+      this.checkSilence();
+    } else {
+      // If no speech, check if we should finalize based on time since last speech
+      this.checkSilenceAfterNoise();
+    }
   }
 
   /**
    * Check if silence has been detected and finalize if needed.
-   * This is called after each audio chunk - if no new chunks arrive for minSilenceMs,
+   * This is called after speech is detected - if no speech is detected for minSilenceMs,
    * we finalize the transcription.
    */
   private checkSilence(): void {
@@ -105,13 +152,35 @@ export class StreamingSTTClient extends EventEmitter {
       clearTimeout(this.silenceTimeout);
     }
 
-    // Set new silence timeout - if no chunks arrive for minSilenceMs, finalize
+    // Set new silence timeout - if no speech is detected for minSilenceMs, finalize
     this.silenceTimeout = setTimeout(() => {
-      if (this.audioBuffer.length > 0 && this.isConnected) {
-        // Process final audio after silence
+      // Double-check: has it been minSilenceMs since last speech?
+      const timeSinceLastSpeech = Date.now() - this.lastSpeechTime;
+      if (timeSinceLastSpeech >= this.minSilenceMs && this.audioBuffer.length > 0 && this.isConnected) {
+        // Process final audio after speech silence
         this.processBufferedAudio(true);
       }
     }, this.minSilenceMs);
+  }
+
+  /**
+   * Check if we should finalize when receiving non-speech chunks.
+   * If it's been minSilenceMs since last speech, finalize even if chunks keep coming.
+   */
+  private checkSilenceAfterNoise(): void {
+    // If we haven't received speech recently, check if we should finalize
+    const timeSinceLastSpeech = Date.now() - this.lastSpeechTime;
+    
+    if (timeSinceLastSpeech >= this.minSilenceMs && this.audioBuffer.length > 0 && this.isConnected) {
+      // Clear existing timeout
+      if (this.silenceTimeout) {
+        clearTimeout(this.silenceTimeout);
+        this.silenceTimeout = null;
+      }
+      
+      // Finalize immediately - no speech detected for minSilenceMs
+      this.processBufferedAudio(true);
+    }
   }
 
   /**
@@ -140,23 +209,31 @@ export class StreamingSTTClient extends EventEmitter {
       // Use batch API for now (WebSocket can be added later)
       const result = await this.transcribeBatch(wavBuffer);
 
-      if (result && result.trim()) {
+      // For partial results, only emit if we have non-empty text
+      // For final results, always emit (even with empty text) so finalize() resolves
+      const hasText = result && result.trim();
+      
+      if (isFinal) {
+        // Always emit final event (even with empty text) so finalize() resolves
         const partial: PartialTranscript = {
-          text: result,
-          isFinal,
+          text: result || '', // Empty string is valid (no speech detected)
+          isFinal: true,
           timestamp: Date.now(),
         };
-
-        if (isFinal) {
-          this.emit('final', partial);
-          this.audioBuffer = []; // Clear buffer after final
-        } else {
-          this.emit('partial', partial);
-          // Clear buffer after partial - new chunks will accumulate fresh
-          // Note: In a true streaming API, partials would be incremental
-          // For now with batch API, we clear to avoid reprocessing same audio
-          this.audioBuffer = [];
-        }
+        this.emit('final', partial);
+        this.audioBuffer = []; // Clear buffer after final
+      } else if (hasText) {
+        // Only emit partial events if we have actual text
+        const partial: PartialTranscript = {
+          text: result,
+          isFinal: false,
+          timestamp: Date.now(),
+        };
+        this.emit('partial', partial);
+        // Clear buffer after partial - new chunks will accumulate fresh
+        // Note: In a true streaming API, partials would be incremental
+        // For now with batch API, we clear to avoid reprocessing same audio
+        this.audioBuffer = [];
       }
     } catch (error) {
       this.emit('error', error);
@@ -220,21 +297,38 @@ export class StreamingSTTClient extends EventEmitter {
 
     const result = await response.json();
 
-    // Handle response format
-    if (result.text) {
+    // Handle response format - empty text is valid (no speech detected)
+    // Format can be: {text: "", ...} or {text: "transcription", ...} or {transcripts: {channel_0: "..."}}
+    if (result.text !== undefined) {
+      // text can be empty string "" for no speech - that's valid
       return result.text.trim();
     } else if (result.transcripts && result.transcripts.channel_0) {
       return result.transcripts.channel_0.trim();
     } else {
-      throw new Error(`Unexpected API response format: ${JSON.stringify(result)}`);
+      // If no text field and no transcripts, return empty string (no speech detected)
+      // Don't throw error for empty responses - that's valid behavior
+      return '';
     }
   }
 
   /**
    * Set minimum silence duration before finalizing (in milliseconds).
+   * This is the duration of no speech (not just no audio chunks).
    */
   setSilenceTimeout(ms: number): void {
     this.minSilenceMs = ms;
+  }
+
+  /**
+   * Set speech energy threshold for voice activity detection.
+   * Lower values = more sensitive (may detect noise as speech)
+   * Higher values = less sensitive (may miss quiet speech)
+   * Default: 500 (good for most environments)
+   * 
+   * @param threshold - RMS energy threshold (default: 500)
+   */
+  setSpeechThreshold(threshold: number): void {
+    this.speechEnergyThreshold = threshold;
   }
 
   /**

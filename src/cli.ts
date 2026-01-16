@@ -23,7 +23,7 @@ program
   .option('--player <command>', 'Custom audio player command (only applies to file mode, overrides platform default)')
   .option('--live', 'Enable live transcription with partial updates (default: true)')
   .option('--no-live', 'Disable live transcription, use batch mode')
-  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 1000)', '1000')
+  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 3000)', '3000')
   .option('--stt-model <id>', 'Realtime STT model id (overrides ELEVENLABS_STT_MODEL)')
   .option('--no-agent', 'Disable AI agent (use simple keyword matching)')
   .action(async (options) => {
@@ -35,7 +35,7 @@ program
       ? options.playMode 
       : 'stream';
     const live = options.noLive ? false : (options.live !== false); // Default to true unless --no-live
-    const silenceMs = parseInt(options.silenceMs || '1000', 10);
+    const silenceMs = parseInt(options.silenceMs || '3000', 10);
     const sttModel = options.sttModel || process.env.ELEVENLABS_STT_MODEL;
     // Use agent if OPENAI_API_KEY is set and --no-agent flag is not present
     const useAgent = !!(process.env.OPENAI_API_KEY && options.agent !== false);
@@ -53,7 +53,7 @@ program
   .option('--player <command>', 'Custom audio player command (only applies to file mode, overrides platform default)')
   .option('--live', 'Enable live transcription with partial updates (default: true)')
   .option('--no-live', 'Disable live transcription, use batch mode')
-  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 1000)', '1000')
+  .option('--silence-ms <number>', 'Silence timeout in milliseconds before finalizing (default: 3000)', '3000')
   .option('--stt-model <id>', 'Realtime STT model id (overrides ELEVENLABS_STT_MODEL)')
   .option('--no-agent', 'Disable AI agent (use simple keyword matching)')
   .action(async (options) => {
@@ -65,7 +65,7 @@ program
       ? options.playMode 
       : 'stream';
     const live = options.noLive ? false : (options.live !== false); // Default to true unless --no-live
-    const silenceMs = parseInt(options.silenceMs || '1000', 10);
+    const silenceMs = parseInt(options.silenceMs || '3000', 10);
     const sttModel = options.sttModel || process.env.ELEVENLABS_STT_MODEL;
     // Use agent if OPENAI_API_KEY is set and --no-agent flag is not present
     const useAgent = !!(process.env.OPENAI_API_KEY && options.agent !== false);

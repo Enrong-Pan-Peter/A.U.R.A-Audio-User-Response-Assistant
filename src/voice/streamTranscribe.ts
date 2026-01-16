@@ -10,7 +10,7 @@ import { transcribe } from './transcribe.js';
 export interface StreamTranscribeOptions {
   /** Enable live transcription (default: true) */
   live?: boolean;
-  /** Silence timeout in milliseconds before finalizing (default: 1000) */
+  /** Silence timeout in milliseconds before finalizing (default: 3000) */
   silenceMs?: number;
   /** Sample rate for audio (default: 16000) */
   sampleRate?: number;
@@ -70,7 +70,7 @@ export async function streamTranscribe(
 ): Promise<StreamTranscribeResult> {
   const {
     live = true,
-    silenceMs = 1000,
+    silenceMs = 3000,
     sampleRate = 16000,
     chunkSizeMs = 40,
     modelId,
@@ -97,11 +97,13 @@ export async function streamTranscribe(
   let finalTranscript = '';
   let manualStop = false;
   let cleanupInput: (() => void) | null = null;
+  let isResolved = false; // Track if promise has been resolved to prevent error handler from triggering
 
   return new Promise<StreamTranscribeResult>((resolve, reject) => {
-    // Setup manual stop handler
-    if (onManualStop || live) {
-      // For manual stop, check if Enter is pressed
+    // Setup manual stop handler only if explicitly requested
+    // Otherwise, rely on automatic silence detection
+    if (onManualStop) {
+      // For manual stop callback, check if Enter is pressed
       const stdin = process.stdin;
       if (stdin.isTTY) {
         stdin.setRawMode(true);
@@ -111,10 +113,12 @@ export async function streamTranscribe(
         const stopHandler = (key: string) => {
           // Enter key or 'q' to stop
           if (key === '\r' || key === '\n' || key === 'q') {
-            manualStop = true;
-            recorder.stop();
-            if (cleanupInput) {
-              cleanupInput();
+            if (onManualStop && onManualStop()) {
+              manualStop = true;
+              recorder.stop();
+              if (cleanupInput) {
+                cleanupInput();
+              }
             }
           }
         };
@@ -169,6 +173,13 @@ export async function streamTranscribe(
     };
 
     const tryCleanupTranscript = async (): Promise<void> => {
+      // Skip cleanup if we already have a non-empty final transcript
+      // Cleanup is only useful if we want to improve the transcript quality
+      // If final transcript is empty, there's nothing to clean up
+      if (!finalTranscript || !finalTranscript.trim()) {
+        return;
+      }
+
       const path = await finalizeAudioPath();
       if (!path) {
         return;
@@ -176,20 +187,28 @@ export async function streamTranscribe(
 
       try {
         const cleanupTranscript = await transcribe(path);
-        if (cleanupTranscript) {
+        if (cleanupTranscript && cleanupTranscript.trim()) {
+          // Only update if cleanup gives us a better/clearer transcript
           finalTranscript = cleanupTranscript;
         }
       } catch (error) {
-        console.warn(
-          '⚠️  Batch cleanup transcription failed, keeping realtime transcript:',
-          error instanceof Error ? error.message : error
-        );
+        // Silently ignore cleanup errors - we already have a transcript
+        // Only log if it's a critical error (not just empty response)
+        if (error instanceof Error && !error.message.includes('Unexpected API response format')) {
+          console.warn(
+            '⚠️  Batch cleanup transcription failed, keeping realtime transcript:',
+            error.message
+          );
+        }
       }
     };
 
     // Handle final transcript
     sttClient.on('final', async (partial: PartialTranscript) => {
+      if (isResolved) return; // Already resolved, ignore
+      
       finalTranscript = partial.text;
+      isResolved = true;
       
       if (live) {
         ui.finalize();
@@ -219,6 +238,12 @@ export async function streamTranscribe(
 
     // Handle errors
     const errorHandler = async (error: Error) => {
+      // If already resolved (successful transcription), ignore this error
+      if (isResolved) {
+        return;
+      }
+
+      isResolved = true;
       recorder.stop();
       sttClient.close();
       if (live) {
@@ -271,6 +296,9 @@ export async function streamTranscribe(
 
       // Handle recorder stop
       recorder.on('stop', async () => {
+        // If already resolved, ignore
+        if (isResolved) return;
+        
         // If manually stopped or recorder ended, finalize
         if (manualStop || !recorder.recording) {
           try {
@@ -288,6 +316,8 @@ export async function streamTranscribe(
             if (cleanupInput) {
               cleanupInput();
             }
+            
+            isResolved = true;
             resolve({
               transcript: finalTranscript,
               audioPath,
@@ -304,6 +334,8 @@ export async function streamTranscribe(
             if (cleanupInput) {
               cleanupInput();
             }
+            
+            isResolved = true;
             resolve({
               transcript: finalTranscript || ui.text,
               audioPath,

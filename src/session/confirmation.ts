@@ -14,7 +14,7 @@ const YES_PATTERNS = [
 const NO_PATTERNS = [
   'no', 'nope', 'nah', 'n', 'cancel', 'cancelled', 'stop', 'never mind',
   "don't", 'dont', 'abort', 'abandon', 'skip', 'ignore', 'false', 'wrong',
-  'negative', 'decline', 'reject'
+  'negative', 'decline', 'reject', 'forget', 'forget about it', 'forget it'
 ];
 
 /**
@@ -122,7 +122,7 @@ export async function getConfirmation(options: {
   useLiveTranscription?: boolean;
   silenceMs?: number;
 } = {}): Promise<ConfirmationResult> {
-  const { useVoice = true, useLiveTranscription = true, silenceMs = 2000 } = options;
+  const { useVoice = true, useLiveTranscription = true, silenceMs = 3000 } = options;
 
   // Show prompt
   console.log('💬 Say "yes" to proceed or "no" to cancel (or type y/n)');
@@ -176,10 +176,10 @@ export async function getConfirmation(options: {
           const { recordAudio } = await import('../voice/record.js');
 
           if (useLiveTranscription) {
-            console.log('🎤 Listening... (Press Enter to stop, or type y/n)');
+            console.log('🎤 Listening... (or type y/n)');
             const result = await streamTranscribe({
               live: true,
-              silenceMs,
+              silenceMs: silenceMs || 3000, // 3 seconds of no speech
             });
             
             if (!resolved) {

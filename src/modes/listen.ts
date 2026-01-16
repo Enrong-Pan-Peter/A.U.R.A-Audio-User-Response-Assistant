@@ -18,7 +18,7 @@ export interface ListenOptions {
   player?: string;
   playMode?: PlayMode;
   live?: boolean; // Enable live transcription (default: true)
-  silenceMs?: number; // Silence timeout in milliseconds (default: 1000)
+  silenceMs?: number; // Silence timeout in milliseconds (default: 3000)
   sttModel?: string; // Realtime STT model id
 }
 
@@ -54,10 +54,10 @@ export async function listenMode(
     
     if (useLiveTranscription) {
       try {
-        console.log('🎤 Listening... (Press Enter to stop)');
+        console.log('🎤 Listening...');
         const result = await streamTranscribe({
           live: true,
-          silenceMs: options.silenceMs || 1000,
+          silenceMs: options.silenceMs || 3000, // 3 seconds of no speech
           modelId: options.sttModel,
         });
         
@@ -272,7 +272,8 @@ export async function listenMode(
       console.log('\n📄 Output:');
       console.log(result.stdout);
     }
-    if (result.stderr) {
+    // Only show stderr as errors if the command actually failed (exit code non-zero)
+    if (result.stderr && result.exitCode !== 0) {
       console.log('\n⚠️  Errors:');
       console.log(result.stderr);
     }

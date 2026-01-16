@@ -17,6 +17,7 @@ export interface InfoIntentResult {
   type: 'info';
   intent: Intent;
   responseText: string;
+  shouldExit?: boolean; // If true, indicates this response should exit the chat
 }
 
 /**
@@ -46,6 +47,7 @@ function categorizeIntent(intent: Intent): IntentCategory {
     Intent.HELP,
     Intent.REPEAT_LAST,
     Intent.CODEBASE_QA,
+    Intent.INTERACTIVE_MODE,
     Intent.UNKNOWN,
     Intent.EXIT,
   ];
@@ -128,13 +130,15 @@ async function handleInfoIntent(
       const style = memory.responseStyle || DEFAULT_RESPONSE_STYLE;
       const includeSnippets = shouldIncludeSnippets(query, style);
       
-      console.log(`🔍 Answering codebase question: "${query}"`);
       const { answerCodebaseQuestion } = await import('../intents/codebaseQA.js');
       const qaResult = await answerCodebaseQuestion(query, process.cwd(), {
         responseStyle: style,
         includeSnippets,
       });
       responseText = qaResult.answer;
+      
+      // Check if this response indicates an exit (e.g., "Thank you, bye")
+      const shouldExit = qaResult.shouldExit || false;
       
       // Add file references if available (but don't duplicate if already in answer)
       if (includeSnippets && qaResult.referencedFiles.length > 0 && !responseText.includes('Referenced files')) {
@@ -148,6 +152,18 @@ async function handleInfoIntent(
       if (qaResult.followUpSuggestion && !responseText.includes(qaResult.followUpSuggestion) && style.verbosity !== 'short') {
         responseText += `\n\n${qaResult.followUpSuggestion}`;
       }
+      
+      // Return with shouldExit flag if set
+      return {
+        type: 'info',
+        intent: shouldExit ? Intent.EXIT : intent,
+        responseText,
+        shouldExit,
+      };
+
+    case Intent.INTERACTIVE_MODE:
+      // This is handled in chat.ts by checking the intent
+      responseText = 'Switching to interactive mode. You can now talk naturally without push-to-talk.';
       break;
 
     case Intent.UNKNOWN:
@@ -166,6 +182,7 @@ async function handleInfoIntent(
     type: 'info',
     intent,
     responseText,
+    shouldExit: false,
   };
 }
 

@@ -66,7 +66,8 @@ Available intents:
 - MAKE_COMMIT: Create git commit (requires params.message)
 - EXPLAIN_FAILURE: Explain why last command failed
 - DETAILS: Show more details about last output
-- CODEBASE_QA: Answer questions about the codebase (requires params.query)
+- CODEBASE_QA: Answer questions about the codebase or analyze code (requires params.query). Examples: "check for bugs in agent.ts", "search for bugs", "analyze agent.ts", "look for issues", "find problems", "where is function X", "how does Y work", "search through codebase", "examine code for bugs", "check code quality", "find potential issues". Also use this intent for general questions like "what is your name" or "who are you" - put the full question in params.query.
+- INTERACTIVE_MODE: Enable interactive conversation mode where user can talk naturally without push-to-talk
 - REPEAT_LAST: Repeat last summary
 - HELP: Show help
 - EXIT: Exit the application
@@ -89,8 +90,15 @@ Analyze this request and return a JSON object with:
 
 IMPORTANT: 
 - Always provide an "explanation" field with a clear, conversational description of what action will be taken. This explanation will be spoken aloud to the user.
-- For CODEBASE_QA intent, extract the user's question and put it in params.query (e.g., if user says "where is recording timeout", set params.query to "where is recording timeout").
- - responseStyle.mode is "${responseStyle.mode}" and responseStyle.verbosity is "${responseStyle.verbosity}". Keep the explanation aligned with that.
+- For CODEBASE_QA intent, extract the user's full question/request and put it in params.query. This includes queries like:
+  * "check for bugs in agent.ts" → params.query: "check for bugs in agent.ts"
+  * "search through the codebase to see if there is a bug in agent.ts file" → params.query: "search through the codebase to see if there is a bug in agent.ts file"
+  * "analyze agent.ts for issues" → params.query: "analyze agent.ts for issues"
+  * "where is recording timeout" → params.query: "where is recording timeout"
+  * "what is your name" → params.query: "what is your name"
+  * "who are you" → params.query: "who are you"
+  * Any question about the code, bugs, issues, code analysis, searching the codebase, or personal questions like "what is your name" should use CODEBASE_QA intent.
+- responseStyle.mode is "${responseStyle.mode}" and responseStyle.verbosity is "${responseStyle.verbosity}". Keep the explanation aligned with that.
 
 Return ONLY valid JSON, no markdown, no code blocks.`;
 
